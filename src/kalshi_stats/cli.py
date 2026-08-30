@@ -19,6 +19,7 @@ from .analytics import (
 )
 from .btc_data import backfill_binance_1s, sync_latest_coinbase_second
 from .database import connect, init_db
+from .dashboard_cache import load_or_build_historical_cache
 from .kalshi_api import KalshiClient
 from .reporting import (
     render_html_report,
@@ -103,6 +104,16 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_parser.add_argument("--scenarios", required=True)
     monitor_parser.add_argument("--output", required=True)
     monitor_parser.add_argument("--series", default="KXBTC15M")
+    monitor_parser.add_argument(
+        "--cache",
+        default=None,
+        help="Persistent historical analytics cache path.",
+    )
+    monitor_parser.add_argument(
+        "--rebuild-cache",
+        action="store_true",
+        help="Force a fresh historical analytics rebuild.",
+    )
     monitor_parser.add_argument("--interval", type=float, default=1.0)
 
     serve_parser = subparsers.add_parser("serve", help="Serve the dashboard locally over HTTP.")
@@ -401,24 +412,34 @@ def main() -> None:
         try:
             init_db(connection)
 
-            print(
-                "Building historical analytics cache..."
-            )
-
-            history_started = time.perf_counter()
-
-            cache = _build_historical_dashboard_cache(
-                connection,
-                args.scenarios,
-            )
-
-            history_elapsed = (
-                time.perf_counter() - history_started
+            cache_path = (
+                Path(args.cache)
+                if args.cache
+                else Path(args.db).with_name(
+                    "historical_dashboard_cache.pkl"
+                )
             )
 
             print(
-                "Historical analytics cache ready "
-                f"in {history_elapsed:.2f}s"
+                "Loading historical analytics..."
+            )
+
+            (
+                cache,
+                cache_status,
+                history_elapsed,
+            ) = load_or_build_historical_cache(
+                connection=connection,
+                scenarios_path=args.scenarios,
+                cache_path=cache_path,
+                builder=_build_historical_dashboard_cache,
+                force_rebuild=args.rebuild_cache,
+            )
+
+            print(
+                "Historical analytics "
+                f"{cache_status} in "
+                f"{history_elapsed:.2f}s"
             )
 
             # One REST sync establishes current metadata and
