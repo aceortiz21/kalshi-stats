@@ -84,6 +84,7 @@ def render_html_report(
     active_views: list[ActiveMarketSideView],
     validated_setups: list[ValidatedSetup],
     validated_strategies,
+    refresh_seconds: int | None = None,
 ) -> None:
     scenario_rows = "\n".join(
         """
@@ -181,6 +182,153 @@ def render_html_report(
         <tr><td colspan="9">No active KXBTC15M markets currently match the configured scenario triggers.</td></tr>
     """
 
+    # LIVE_STRATEGY_MATCHING
+    strong_strategy_map = {}
+
+    for result in validated_strategies:
+        if result.validation_status != "STRONG":
+            continue
+
+        key = (
+            result.price_bucket,
+            result.time_bucket,
+        )
+
+        strong_strategy_map.setdefault(
+            key,
+            [],
+        ).append(result)
+
+    def _live_profit(value: float | None) -> str:
+        if value is None:
+            return "-"
+        return f"{value * 100:+.2f}¢"
+
+    def _live_ci(summary) -> str:
+        if (
+            summary.profit_ci_low is None
+            or summary.profit_ci_high is None
+        ):
+            return "-"
+
+        return (
+            f"{summary.profit_ci_low * 100:+.2f}¢ "
+            f"to "
+            f"{summary.profit_ci_high * 100:+.2f}¢"
+        )
+
+    def _live_strategy_matches(view) -> str:
+        matches = strong_strategy_map.get(
+            (
+                view.price_bucket,
+                view.time_bucket,
+            ),
+            [],
+        )
+
+        if not matches:
+            return """
+            <div class="live-strategy-empty">
+              No STRONG historical strategy matches this state.
+            </div>
+            """
+
+        cards = []
+
+        for result in matches:
+            discovery = result.discovery_summary
+            holdout = result.holdout_summary
+
+            cards.append(
+                """
+                <div class="live-strategy-match">
+                  <div class="live-strategy-name">
+                    {strategy}
+                  </div>
+
+                  <div class="live-strategy-metrics">
+                    <div>
+                      <span>Discovery Avg Return</span>
+                      <strong>{discovery_avg}</strong>
+                      <small>
+                        Profitable exits {discovery_win_rate}
+                      </small>
+                      <small>
+                        N={discovery_n:,} · 95% CI {discovery_ci}
+                      </small>
+                    </div>
+
+                    <div>
+                      <span>Holdout Avg Return</span>
+                      <strong>{holdout_avg}</strong>
+                      <small>
+                        Profitable exits {holdout_win_rate}
+                      </small>
+                      <small>
+                        N={holdout_n:,} · 95% CI {holdout_ci}
+                      </small>
+                    </div>
+                  </div>
+
+                  <div class="live-exit-behavior">
+                    Holdout exit behavior:
+                    TP {holdout_tp_rate}
+                    · SL {holdout_sl_rate}
+                  </div>
+                </div>
+                """.format(
+                    strategy=html.escape(
+                        result.strategy.name
+                    ),
+                    discovery_avg=_live_profit(
+                        discovery.avg_profit
+                    ),
+                    discovery_win_rate=_pct(
+                        discovery.win_rate
+                    ),
+                    discovery_n=discovery.observations,
+                    discovery_ci=html.escape(
+                        _live_ci(discovery)
+                    ),
+                    holdout_avg=_live_profit(
+                        holdout.avg_profit
+                    ),
+                    holdout_win_rate=_pct(
+                        holdout.win_rate
+                    ),
+                    holdout_n=holdout.observations,
+                    holdout_ci=html.escape(
+                        _live_ci(holdout)
+                    ),
+                    holdout_tp_rate=_pct(
+                        holdout.take_profit_rate
+                    ),
+                    holdout_sl_rate=_pct(
+                        holdout.stop_loss_rate
+                    ),
+                )
+            )
+
+        count = len(matches)
+        noun = "strategy" if count == 1 else "strategies"
+
+        return """
+        <div class="live-strategy-panel">
+          <div class="live-strategy-heading">
+            <span>Validated Strategy Match</span>
+            <strong>
+              {count} STRONG {noun}
+            </strong>
+          </div>
+
+          {cards}
+        </div>
+        """.format(
+            count=count,
+            noun=noun,
+            cards="\n".join(cards),
+        )
+
     active_cards = "\n".join(
         """
         <article class="market-card {side_class}">
@@ -202,16 +350,16 @@ def render_html_report(
               <strong>{price_bucket} · {time_bucket}</strong>
             </div>
             <div>
-              <span>Historical N</span>
+              <span>State Sample N</span>
               <strong>{obs}</strong>
             </div>
             <div>
-              <span>Eventual Win</span>
+              <span>Historical Settle {side}</span>
               <strong>{win_rate}</strong>
             </div>
           </div>
 
-          <div class="section-label">Subsequent Price Reach</div>
+          <div class="section-label">Historical Move Probabilities</div>
           <div class="target-grid">
             <div><span>+5¢</span><strong>{plus_5}</strong></div>
             <div><span>+10¢</span><strong>{plus_10}</strong></div>
@@ -234,6 +382,8 @@ def render_html_report(
             <span>Matching scenarios</span>
             <strong>{matched}</strong>
           </div>
+
+          {strategy_matches}
         </article>
         """.format(
             market=html.escape(view.market_ticker),
@@ -252,6 +402,7 @@ def render_html_report(
             avg_best=_price(view.avg_best_subsequent_price),
             median_best=_price(view.median_best_subsequent_price),
             matched=html.escape(", ".join(view.matched_scenarios) or "None"),
+            strategy_matches=_live_strategy_matches(view),
         )
         for view in active_views
     ) or """
@@ -457,6 +608,29 @@ def render_html_report(
     Historical analysis uses real data already stored in the database. Scenario counting defaults to first entry per market unless a scenario explicitly opts into re-entry after cooldown. Markets with partial trade history are excluded from trade-based scenario analysis so they do not silently dilute the statistics.
     """
 
+    # LIVE_BROWSER_AUTO_REFRESH
+    if refresh_seconds is None:
+        auto_refresh_script = ""
+    else:
+        refresh_ms = max(
+            1000,
+            int(refresh_seconds * 1000),
+        )
+
+        auto_refresh_script = (
+            "<script>\n"
+            "const scrollKey = 'kalshi-dashboard-scroll-y';\n"
+            "const savedScroll = sessionStorage.getItem(scrollKey);\n"
+            "if (savedScroll !== null) {\n"
+            "  window.scrollTo(0, Number(savedScroll));\n"
+            "}\n"
+            "window.addEventListener('beforeunload', () => {\n"
+            "  sessionStorage.setItem(scrollKey, String(window.scrollY));\n"
+            "});\n"
+            f"setTimeout(() => window.location.reload(), {refresh_ms});\n"
+            "</script>"
+        )
+
     document = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -521,6 +695,84 @@ def render_html_report(
       font-size: 1.55rem;
       color: var(--accent);
     }}
+    /* LIVE_STRATEGY_MATCH_STYLES */
+    .live-strategy-panel {{
+      margin-top: 16px;
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+    }}
+
+    .live-strategy-heading {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }}
+
+    .live-strategy-heading span {{
+      color: var(--muted);
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }}
+
+    .live-strategy-heading strong {{
+      color: var(--accent);
+    }}
+
+    .live-strategy-match {{
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(13, 107, 83, 0.05);
+      padding: 12px;
+      margin-top: 9px;
+    }}
+
+    .live-strategy-name {{
+      font-weight: 700;
+      margin-bottom: 9px;
+    }}
+
+    .live-strategy-metrics {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }}
+
+    .live-strategy-metrics div {{
+      background: rgba(255, 255, 255, 0.72);
+      border-radius: 9px;
+      padding: 9px;
+    }}
+
+    .live-strategy-metrics span,
+    .live-strategy-metrics small {{
+      display: block;
+      color: var(--muted);
+    }}
+
+    .live-strategy-metrics strong {{
+      display: block;
+      margin: 3px 0;
+      color: var(--accent);
+      font-size: 1.05rem;
+    }}
+
+    .live-exit-behavior {{
+      margin-top: 9px;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }}
+
+    .live-strategy-empty {{
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.9rem;
+    }}
+
     /* VALIDATED_STRATEGY_STYLES */
     .strategy-summary {{
       display: grid;
@@ -966,6 +1218,23 @@ def render_html_report(
       </div>
     </section>
 
+    <section class="live-section">
+      <div class="section-heading">
+        <div>
+          <h2>Current Market</h2>
+          <p>
+            Current YES and NO prices mapped to the exact historical
+            price/time state. Settlement odds and price-move probabilities
+            describe what happened historically from comparable states;
+            validated strategy matches appear directly on each side.
+          </p>
+        </div>
+      </div>
+
+      <div class="live-grid">
+        {active_cards}
+      </div>
+    </section>
     <!-- VALIDATED_STRATEGY_FINDER -->
     <section class="strategy-section">
       <div class="section-heading">
@@ -1061,21 +1330,6 @@ def render_html_report(
       </p>
     </section>
 
-    <section class="live-section">
-      <div class="section-heading">
-        <div>
-          <h2>Current Market</h2>
-          <p>
-            Live YES and NO prices mapped directly to historically comparable
-            price and time states.
-          </p>
-        </div>
-      </div>
-
-      <div class="live-grid">
-        {active_cards}
-      </div>
-    </section>
     <section>
       <h2>Live Scenario Board</h2>
       <p>Only active markets that currently satisfy one of the named scenario definitions appear here.</p>
@@ -1221,6 +1475,7 @@ def render_html_report(
       </div>
     </section>
   </main>
+  {auto_refresh_script}
 </body>
 </html>
 """

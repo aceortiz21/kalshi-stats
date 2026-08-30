@@ -129,9 +129,27 @@ class KalshiClient:
                 break
         return trades
 
-    def get_active_markets(self, series_ticker: str, limit: int = 32) -> list[dict[str, Any]]:
-        markets = self.get_json("/markets", {"series_ticker": series_ticker, "limit": limit}).get("markets", [])
-        return [market for market in markets if market.get("status") not in {"finalized", "settled"}]
+    def get_active_markets(
+        self,
+        series_ticker: str,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Return all currently open markets for a series.
+
+        The markets endpoint is paginated. Filtering by status=open before
+        pagination prevents scheduled/settled markets from crowding the
+        current KXBTC15M contract out of the first response page.
+        """
+        page_limit = max(1, min(limit, 1000))
+
+        return self.iter_markets(
+            "/markets",
+            {
+                "series_ticker": series_ticker,
+                "status": "open",
+                "limit": page_limit,
+            },
+        )
 
     @staticmethod
     def iso_now() -> str:

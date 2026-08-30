@@ -441,6 +441,7 @@ def main() -> None:
                     active_views,
                     cache["validated_setups"],
                     cache["validated_strategies"],
+                    refresh_seconds=args.interval,
                 )
 
                 refresh_elapsed = (
