@@ -62,7 +62,22 @@ def _opposite(side: str) -> str:
 def _iso_to_ts(value: str) -> int:
     if value is None:
         return 0
+
     value = value.replace("Z", "+00:00")
+
+    if "." in value:
+        base, remainder = value.split(".", 1)
+
+        if "+" in remainder:
+            fraction, tz = remainder.split("+", 1)
+            fraction = fraction[:6].ljust(6, "0")
+            value = f"{base}.{fraction}+{tz}"
+
+        elif "-" in remainder:
+            fraction, tz = remainder.split("-", 1)
+            fraction = fraction[:6].ljust(6, "0")
+            value = f"{base}.{fraction}-{tz}"
+
     timestamp = int(__import__("datetime").datetime.fromisoformat(value).timestamp())
     return timestamp
 
@@ -597,13 +612,48 @@ def build_probability_matrix(
         series = series_map.get(market["ticker"])
         if not series:
             continue
+
+        yes_future_best = [0.0] * len(series)
+        no_future_best = [0.0] * len(series)
+
+        running_yes_best = 0.0
+        running_no_best = 0.0
+
+        for index in range(len(series) - 1, -1, -1):
+            observation = series[index]
+
+            yes_high = _side_low_high(observation, "yes")[1]
+            no_high = _side_low_high(observation, "no")[1]
+
+            running_yes_best = max(running_yes_best, yes_high)
+            running_no_best = max(running_no_best, no_high)
+
+            yes_future_best[index] = running_yes_best
+            no_future_best[index] = running_no_best
+
         for index, observation in enumerate(series):
             for side in ("yes", "no"):
                 current_price = _side_close(observation, side)
-                price_label = _bucket_label(int(round(current_price * 100)), [(int(low * 100), int(high * 100), label) for low, high, label in PRICE_BUCKETS])
-                time_label = _bucket_label(observation.seconds_remaining, MATRIX_TIME_BUCKETS)
-                future = series[index:]
-                future_best = max(_side_low_high(item, side)[1] for item in future)
+
+                price_label = _bucket_label(
+                    int(round(current_price * 100)),
+                    [
+                        (int(low * 100), int(high * 100), label)
+                        for low, high, label in PRICE_BUCKETS
+                    ],
+                )
+
+                time_label = _bucket_label(
+                    observation.seconds_remaining,
+                    MATRIX_TIME_BUCKETS,
+                )
+
+                future_best = (
+                    yes_future_best[index]
+                    if side == "yes"
+                    else no_future_best[index]
+                )
+
                 buckets[(price_label, time_label)].append(
                     {
                         "won": _eventual_win(market["result"], side),
