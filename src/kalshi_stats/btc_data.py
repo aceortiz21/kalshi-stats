@@ -15,6 +15,28 @@ BINANCE_DAILY_TEMPLATE = (
 )
 
 
+
+def _normalize_binance_timestamp_ms(
+    value: str | int,
+) -> int:
+    """
+    Normalize Binance archive timestamps to milliseconds.
+
+    Binance public spot archives have used both millisecond
+    and microsecond timestamps. Our btc_1s table always uses ms.
+    """
+
+    timestamp = int(value)
+
+    # Current epoch timestamps:
+    # milliseconds  ~= 1.7e12
+    # microseconds  ~= 1.7e15
+    if timestamp >= 100_000_000_000_000:
+        return timestamp // 1000
+
+    return timestamp
+
+
 def _daterange(start_day: date, end_day: date) -> list[date]:
     days: list[date] = []
     current = start_day
@@ -39,7 +61,7 @@ def _download_day(day: date) -> list[tuple[int, str, float, float, float, float,
         with archive.open(name) as handle:
             reader = csv.reader(TextIOWrapper(handle, encoding="utf-8"))
             for row in reader:
-                open_time_ms = int(row[0])
+                open_time_ms = _normalize_binance_timestamp_ms(row[0])
                 rows.append(
                     (
                         open_time_ms,
