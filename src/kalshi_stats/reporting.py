@@ -79,6 +79,7 @@ def _overlaps(summary: ScenarioSummary) -> str:
 def render_live_decision_cards(
     active_views,
     validated_strategies,
+    micro_states=None,
 ) -> str:
     """Render the fast live decision layer.
 
@@ -86,6 +87,8 @@ def render_live_decision_cards(
     Holdout statistics are displayed as validation evidence,
     not used to rank/select candidates.
     """
+
+    micro_states = micro_states or {}
 
     strong_strategy_map = {}
 
@@ -265,15 +268,6 @@ def render_live_decision_cards(
 
 
     def micro_panel(view) -> str:
-        """
-        Display the live target ladder for cheap
-        contracts.
-
-        This is explicitly research-only until the
-        prospective executable-bid sample is large
-        enough to validate the historical touch results.
-        """
-
         entry = (
             view.ask_price
             if view.ask_price is not None
@@ -291,84 +285,306 @@ def render_live_decision_cards(
         ):
             return ""
 
-        all_targets = [
-            .002,
-            .003,
-            .004,
-            .005,
-            .006,
-            .008,
-            .010,
-            .015,
-            .020,
-            .025,
-            .030,
-            .040,
-            .050,
-            .060,
-            .080,
-            .100,
-            .120,
-            .150,
-            .200,
-            .250,
-            .300,
-            .400,
-            .500,
-        ]
-
-        available = [
-            target
-            for target in all_targets
-            if target > entry
-        ]
-
-        # Show nearby paths plus a few large-multiplier
-        # landmarks without making the live card huge.
-        selected = (
-            available[:6]
+        key = (
+            str(
+                view.market_ticker
+            ),
+            str(
+                view.side
+            ).lower(),
         )
 
-        for landmark in (
+        state = micro_states.get(
+            key
+        )
+
+        if not state:
+            return """
+            <div style="
+                margin-top:14px;
+                padding:12px;
+                border:
+                    1px solid rgba(127,127,127,.28);
+                border-radius:10px;
+            ">
+              <strong>
+                MICRO MULTIPLIER RESEARCH
+              </strong>
+
+              <div style="
+                  margin-top:7px;
+                  font-size:12px;
+                  opacity:.72;
+              ">
+                Historical atlas state is loading.
+              </div>
+            </div>
+            """
+
+        rows = list(
+            state.get(
+                "rows",
+                [],
+            )
+        )
+
+        if not rows:
+            return """
+            <div style="
+                margin-top:14px;
+                padding:12px;
+                border:
+                    1px solid rgba(127,127,127,.28);
+                border-radius:10px;
+            ">
+              <strong>
+                MICRO MULTIPLIER RESEARCH
+              </strong>
+
+              <div style="
+                  margin-top:7px;
+                  font-size:12px;
+                  opacity:.72;
+              ">
+                No historical atlas observations match
+                this exact 0.1c price / time state.
+              </div>
+            </div>
+            """
+
+        selected = []
+
+        def add_row(row):
+            target_key = row[
+                "target_price_key"
+            ]
+
+            if any(
+                existing[
+                    "target_price_key"
+                ]
+                == target_key
+                for existing
+                in selected
+            ):
+                return
+
+            selected.append(
+                row
+            )
+
+        # Always show nearby targets.
+        for row in rows[:4]:
+            add_row(
+                row
+            )
+
+        # Always surface statistically interesting
+        # historical/live candidates.
+        for row in rows:
+            if row[
+                "status"
+            ] in {
+                "HISTORICAL MICRO LEAD",
+                "LIVE-VALIDATED MICRO",
+            }:
+                add_row(
+                    row
+                )
+
+        # Also show useful large-multiplier landmarks.
+        for target in (
+            .02,
+            .05,
             .10,
             .20,
             .50,
         ):
-            if (
-                landmark > entry
-                and landmark
-                in available
-                and landmark
-                not in selected
-            ):
-                selected.append(
-                    landmark
-                )
+            for row in rows:
+                if abs(
+                    row[
+                        "target_price"
+                    ]
+                    - target
+                ) < 1e-9:
+                    add_row(
+                        row
+                    )
+                    break
 
-        cells = []
+        # Prioritize leads if the card would otherwise
+        # become too large.
+        if len(
+            selected
+        ) > 12:
+            selected.sort(
+                key=lambda row: (
+                    row[
+                        "status"
+                    ]
+                    == "LIVE-VALIDATED MICRO",
 
-        for target in selected:
-            multiplier = (
-                target
-                / entry
+                    row[
+                        "status"
+                    ]
+                    == "HISTORICAL MICRO LEAD",
+
+                    row[
+                        "conservative_edge"
+                    ],
+
+                    row[
+                        "multiplier"
+                    ],
+                ),
+                reverse=True,
             )
 
-            cells.append(
+            selected = (
+                selected[:12]
+            )
+
+        selected.sort(
+            key=lambda row:
+                row[
+                    "target_price"
+                ]
+        )
+
+        table_rows = []
+
+        for row in selected:
+            live_n = row[
+                "live_completed"
+            ]
+
+            if live_n:
+                live_text = (
+                    f"{row['live_touch_rate'] * 100:.1f}% "
+                    f"({row['live_hits']}/{live_n})"
+                )
+
+            else:
+                live_text = "N=0"
+
+            status = row[
+                "status"
+            ]
+
+            if status == "LIVE-VALIDATED MICRO":
+                status_style = (
+                    "font-weight:700;"
+                    "color:#0d6b53;"
+                )
+
+            elif status == "HISTORICAL MICRO LEAD":
+                status_style = (
+                    "font-weight:700;"
+                    "color:#76520f;"
+                )
+
+            else:
+                status_style = (
+                    "opacity:.68;"
+                )
+
+            table_rows.append(
                 """
-                <div>
-                  <span>{multiplier:.1f}x target</span>
-                  <strong>{target}</strong>
-                </div>
+                <tr>
+                  <td>
+                    <strong>{target}</strong>
+                  </td>
+
+                  <td>{multiplier:.1f}x</td>
+
+                  <td>
+                    <strong>{touch:.1f}%</strong>
+                  </td>
+
+                  <td>
+                    {ci_low:.1f}-{ci_high:.1f}%
+                  </td>
+
+                  <td>{n}</td>
+
+                  <td>
+                    {needed:.1f}%
+                  </td>
+
+                  <td>
+                    {live}
+                  </td>
+
+                  <td style="{status_style}">
+                    {status}
+                  </td>
+                </tr>
                 """.format(
-                    multiplier=multiplier,
                     target=_price(
-                        target
+                        row[
+                            "target_price"
+                        ]
+                    ),
+
+                    multiplier=row[
+                        "multiplier"
+                    ],
+
+                    touch=(
+                        row[
+                            "touch_rate"
+                        ]
+                        * 100
+                    ),
+
+                    ci_low=(
+                        row[
+                            "ci_low"
+                        ]
+                        * 100
+                    ),
+
+                    ci_high=(
+                        row[
+                            "ci_high"
+                        ]
+                        * 100
+                    ),
+
+                    n=row[
+                        "observations"
+                    ],
+
+                    needed=(
+                        row[
+                            "break_even_touch"
+                        ]
+                        * 100
+                    ),
+
+                    live=html.escape(
+                        live_text
+                    ),
+
+                    status_style=(
+                        status_style
+                    ),
+
+                    status=html.escape(
+                        status
                     ),
                 )
             )
 
-        target_html = "\n".join(
-            cells
+        tracking = (
+            "TRACKING THIS LIVE STATE"
+            if state.get(
+                "current_tracked"
+            )
+            else (
+                "WAITING FOR LOGGER CAPTURE "
+                "AT THIS EXACT PRICE/TIME STATE"
+            )
         )
 
         return """
@@ -381,16 +597,6 @@ def render_live_decision_cards(
         ">
 
           <div style="
-              font-size:12px;
-              text-transform:uppercase;
-              letter-spacing:.07em;
-              opacity:.72;
-              margin-bottom:8px;
-          ">
-            Micro multiplier research
-          </div>
-
-          <div style="
               display:flex;
               justify-content:space-between;
               gap:12px;
@@ -399,46 +605,82 @@ def render_live_decision_cards(
               margin-bottom:10px;
           ">
             <div>
-              <span>
-                Current executable ask
-              </span>
+              <div style="
+                  font-size:12px;
+                  text-transform:uppercase;
+                  letter-spacing:.07em;
+                  opacity:.72;
+              ">
+                Micro multiplier research
+              </div>
 
               <strong style="
                   display:block;
                   font-size:20px;
+                  margin-top:3px;
               ">
-                {entry}
+                {entry} · {time_bucket}
               </strong>
             </div>
 
             <div style="
-                font-size:12px;
-                opacity:.72;
-                max-width:390px;
+                font-size:11px;
+                font-weight:700;
+                opacity:.75;
             ">
-              Research question: does the executable
-              bid reach one of these targets at least
-              once before expiry?
+              {tracking}
             </div>
           </div>
 
           <div style="
-              display:grid;
-              grid-template-columns:
-                  repeat(auto-fit,minmax(105px,1fr));
-              gap:8px;
+              overflow-x:auto;
           ">
-            {targets}
+            <table style="
+                font-size:12px;
+                min-width:760px;
+            ">
+              <thead>
+                <tr>
+                  <th>Target</th>
+                  <th>Multiple</th>
+                  <th>Hist Touch</th>
+                  <th>95% CI</th>
+                  <th>Hist N</th>
+                  <th>Gross Needed</th>
+                  <th>Live Bid Evidence</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {rows}
+              </tbody>
+            </table>
           </div>
 
           <div style="
               margin-top:10px;
               font-size:12px;
               opacity:.72;
+              line-height:1.45;
           ">
-            PROSPECTIVE RESEARCH · not yet a validated
-            trading signal. The logger tracks actual
-            observed executable-bid target hits.
+            Historical atlas baseline:
+            {source_markets:,} fixed development markets.
+            Historical touch uses price-path data;
+            live evidence requires the observed executable
+            bid to reach the target.
+
+            <br>
+
+            HISTORICAL MICRO LEAD means historical N>=50
+            and the 95% CI lower bound exceeded gross
+            break-even. LIVE-VALIDATED MICRO additionally
+            requires >=50 completed prospective observations
+            with the live 95% CI lower bound above that same
+            break-even threshold.
+
+            Fees, queue position and available order size
+            remain unmodeled.
           </div>
 
         </div>
@@ -446,7 +688,27 @@ def render_live_decision_cards(
             entry=_price(
                 entry
             ),
-            targets=target_html,
+
+            time_bucket=html.escape(
+                state[
+                    "time_bucket"
+                ]
+            ),
+
+            tracking=html.escape(
+                tracking
+            ),
+
+            rows="\n".join(
+                table_rows
+            ),
+
+            source_markets=int(
+                state.get(
+                    "source_market_count",
+                    0,
+                )
+            ),
         )
 
 
@@ -1730,8 +1992,11 @@ def render_live_market_fragment(
     health=None,
     brti=None,
     personal=None,
+    micro_states=None,
 ) -> None:
     """Write only the lightweight live decision UI."""
+
+    micro_states = micro_states or {}
 
     output = Path(output_path)
 
@@ -1766,6 +2031,7 @@ def render_live_market_fragment(
             render_live_decision_cards(
                 yes_views,
                 validated_strategies,
+                micro_states=micro_states,
             )
         )
 
@@ -1781,6 +2047,7 @@ def render_live_market_fragment(
             render_live_decision_cards(
                 no_views,
                 validated_strategies,
+                micro_states=micro_states,
             )
         )
 
@@ -1789,6 +2056,7 @@ def render_live_market_fragment(
             render_live_decision_cards(
                 other_views,
                 validated_strategies,
+                micro_states=micro_states,
             )
         )
 
@@ -1801,6 +2069,7 @@ def render_live_market_fragment(
             render_live_decision_cards(
                 [],
                 validated_strategies,
+                micro_states=micro_states,
             )
         )
 
@@ -3300,11 +3569,11 @@ setInterval(updateFastLiveFields, 100);
         </div>
       </div>
       <div class="stats">
-        <div class="stat"><span>Total Markets</span><strong>{overview["market_count"]}</strong></div>
-        <div class="stat"><span>Settled Markets</span><strong>{overview["settled_market_count"]}</strong></div>
+        <div class="stat"><span>Market Metadata</span><strong>{overview["market_count"]}</strong></div>
+        <div class="stat"><span>Settled Metadata</span><strong>{overview["settled_market_count"]}</strong></div>
         <div class="stat"><span>Settled With Trade History</span><strong>{overview["settled_with_trade_history"]}</strong></div>
-        <div class="stat"><span>Settled With Candle History</span><strong>{overview["settled_with_candle_history"]}</strong></div>
-        <div class="stat"><span>BTC-Covered Markets</span><strong>{overview["btc_covered_markets"]}</strong></div>
+        <div class="stat"><span>Detailed Candle Markets</span><strong>{overview["settled_with_candle_history"]}</strong></div>
+        <div class="stat"><span>BTC-Feature Markets</span><strong>{overview["btc_covered_markets"]}</strong></div>
         <div class="stat"><span>Kalshi Trades</span><strong>{overview["trade_count"]}</strong></div>
         <div class="stat"><span>BTC 1s Rows</span><strong>{overview["btc_row_count"]}</strong></div>
         <div class="stat"><span>Last Live Sync</span><strong>{html.escape(str(overview["last_snapshot"] or "-"))}</strong></div>
@@ -3470,7 +3739,7 @@ setInterval(updateFastLiveFields, 100);
     <section class="strategy-section">
       <div class="section-heading">
         <div>
-          <h2>Validated Strategy Finder</h2>
+          <h2>Historical Strategy Research Archive</h2>
           <p>
             Mechanical exit strategies discovered on the earlier 80% of
             historical markets and tested against the later unseen 20%.
@@ -3499,7 +3768,7 @@ setInterval(updateFastLiveFields, 100);
         </div>
       </div>
 
-      <h3>STRONG strategies</h3>
+      <h3>Historical STRONG research survivors</h3>
       <p>
         These are the primary out-of-sample survivors. Ranking remains based
         on discovery data only; holdout is used only to validate the candidate.

@@ -71,6 +71,506 @@ def lookup_micro_atlas(
     ).fetchall()
 
 
+
+def build_live_micro_state(
+    connection,
+    *,
+    market_ticker,
+    side,
+    entry_ask,
+    seconds_remaining,
+):
+    """
+    Combine the fixed historical atlas with growing
+    prospective executable-bid evidence for one live
+    cheap-contract state.
+    """
+
+    entry_ask = float(
+        entry_ask
+    )
+
+    if not (
+        MICRO_MIN_PRICE
+        <= entry_ask
+        <= MICRO_MAX_PRICE
+    ):
+        return None
+
+    entry_key = price_key(
+        entry_ask
+    )
+
+    bucket = time_bucket(
+        seconds_remaining
+    )
+
+    if bucket == "unknown":
+        return None
+
+    atlas_rows = lookup_micro_atlas(
+        connection,
+        entry_ask=entry_ask,
+        seconds_remaining=seconds_remaining,
+    )
+
+    prospective_rows = (
+        connection.execute(
+            """
+            SELECT
+                CAST(
+                    ROUND(
+                        targets.target_price
+                        * 1000
+                    )
+                    AS INTEGER
+                ) AS target_key,
+
+                COUNT(*) AS total,
+
+                SUM(
+                    CASE
+                        WHEN targets.status
+                             IN ('HIT', 'MISS')
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS completed,
+
+                SUM(
+                    CASE
+                        WHEN targets.status = 'HIT'
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS hits,
+
+                SUM(
+                    CASE
+                        WHEN targets.status = 'INCOMPLETE'
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS incomplete
+
+            FROM micro_multiplier_opportunities
+                AS opportunities
+
+            JOIN micro_multiplier_targets
+                AS targets
+
+              ON targets.micro_opportunity_id
+                 =
+                 opportunities.micro_opportunity_id
+
+            WHERE
+                opportunities.entry_price_key = ?
+                AND opportunities.time_bucket = ?
+
+            GROUP BY target_key
+            """,
+            (
+                entry_key,
+                bucket,
+            ),
+        ).fetchall()
+    )
+
+    prospective = {}
+
+    for row in prospective_rows:
+        target_key = int(
+            row["target_key"]
+        )
+
+        completed = int(
+            row["completed"]
+            or 0
+        )
+
+        hits = int(
+            row["hits"]
+            or 0
+        )
+
+        if completed:
+            rate = (
+                hits
+                / completed
+            )
+
+            ci_low, ci_high = (
+                wilson_interval(
+                    hits,
+                    completed,
+                )
+            )
+
+        else:
+            rate = None
+            ci_low = None
+            ci_high = None
+
+        prospective[
+            target_key
+        ] = {
+            "total":
+                int(
+                    row["total"]
+                    or 0
+                ),
+
+            "completed":
+                completed,
+
+            "hits":
+                hits,
+
+            "incomplete":
+                int(
+                    row["incomplete"]
+                    or 0
+                ),
+
+            "touch_rate":
+                rate,
+
+            "ci_low":
+                ci_low,
+
+            "ci_high":
+                ci_high,
+        }
+
+    current_tracked = (
+        connection.execute(
+            """
+            SELECT 1
+
+            FROM micro_multiplier_opportunities
+
+            WHERE market_ticker = ?
+              AND side = ?
+              AND entry_price_key = ?
+              AND time_bucket = ?
+
+            LIMIT 1
+            """,
+            (
+                str(
+                    market_ticker
+                ),
+                str(
+                    side
+                ).lower(),
+                entry_key,
+                bucket,
+            ),
+        ).fetchone()
+        is not None
+    )
+
+    combined = []
+
+    for atlas in atlas_rows:
+        target_key = int(
+            atlas[
+                "target_price_key"
+            ]
+        )
+
+        live = prospective.get(
+            target_key,
+            {
+                "total": 0,
+                "completed": 0,
+                "hits": 0,
+                "incomplete": 0,
+                "touch_rate": None,
+                "ci_low": None,
+                "ci_high": None,
+            },
+        )
+
+        historical_lead = (
+            int(
+                atlas[
+                    "observations"
+                ]
+            )
+            >= 50
+            and float(
+                atlas[
+                    "ci_low"
+                ]
+            )
+            > float(
+                atlas[
+                    "break_even_touch"
+                ]
+            )
+        )
+
+        live_validated = (
+            live[
+                "completed"
+            ]
+            >= 50
+            and live[
+                "ci_low"
+            ]
+            is not None
+            and live[
+                "ci_low"
+            ]
+            > float(
+                atlas[
+                    "break_even_touch"
+                ]
+            )
+        )
+
+        if live_validated:
+            status = (
+                "LIVE-VALIDATED MICRO"
+            )
+
+        elif historical_lead:
+            status = (
+                "HISTORICAL MICRO LEAD"
+            )
+
+        else:
+            status = "RESEARCH"
+
+        combined.append(
+            {
+                "target_price":
+                    float(
+                        atlas[
+                            "target_price"
+                        ]
+                    ),
+
+                "target_price_key":
+                    target_key,
+
+                "multiplier":
+                    float(
+                        atlas[
+                            "multiplier"
+                        ]
+                    ),
+
+                "observations":
+                    int(
+                        atlas[
+                            "observations"
+                        ]
+                    ),
+
+                "historical_hits":
+                    int(
+                        atlas[
+                            "hits"
+                        ]
+                    ),
+
+                "touch_rate":
+                    float(
+                        atlas[
+                            "touch_rate"
+                        ]
+                    ),
+
+                "ci_low":
+                    float(
+                        atlas[
+                            "ci_low"
+                        ]
+                    ),
+
+                "ci_high":
+                    float(
+                        atlas[
+                            "ci_high"
+                        ]
+                    ),
+
+                "break_even_touch":
+                    float(
+                        atlas[
+                            "break_even_touch"
+                        ]
+                    ),
+
+                "conservative_edge":
+                    float(
+                        atlas[
+                            "conservative_edge"
+                        ]
+                    ),
+
+                "limit_only_roi":
+                    float(
+                        atlas[
+                            "limit_only_roi"
+                        ]
+                    ),
+
+                "live_total":
+                    live[
+                        "total"
+                    ],
+
+                "live_completed":
+                    live[
+                        "completed"
+                    ],
+
+                "live_hits":
+                    live[
+                        "hits"
+                    ],
+
+                "live_incomplete":
+                    live[
+                        "incomplete"
+                    ],
+
+                "live_touch_rate":
+                    live[
+                        "touch_rate"
+                    ],
+
+                "live_ci_low":
+                    live[
+                        "ci_low"
+                    ],
+
+                "live_ci_high":
+                    live[
+                        "ci_high"
+                    ],
+
+                "status":
+                    status,
+            }
+        )
+
+    source_market_count = (
+        int(
+            atlas_rows[0][
+                "source_market_count"
+            ]
+        )
+        if atlas_rows
+        else 0
+    )
+
+    generated_at_ms = (
+        int(
+            atlas_rows[0][
+                "generated_at_ms"
+            ]
+        )
+        if atlas_rows
+        else None
+    )
+
+    return {
+        "market_ticker":
+            str(
+                market_ticker
+            ),
+
+        "side":
+            str(
+                side
+            ).lower(),
+
+        "entry_ask":
+            entry_ask,
+
+        "entry_price_key":
+            entry_key,
+
+        "time_bucket":
+            bucket,
+
+        "source_market_count":
+            source_market_count,
+
+        "atlas_generated_at_ms":
+            generated_at_ms,
+
+        "current_tracked":
+            current_tracked,
+
+        "rows":
+            combined,
+    }
+
+
+def live_micro_states_signature(
+    states,
+):
+    if not states:
+        return ()
+
+    result = []
+
+    for key in sorted(
+        states
+    ):
+        state = states[
+            key
+        ]
+
+        result.append(
+            (
+                key,
+                state.get(
+                    "entry_price_key"
+                ),
+                state.get(
+                    "time_bucket"
+                ),
+                state.get(
+                    "current_tracked"
+                ),
+                tuple(
+                    (
+                        row[
+                            "target_price_key"
+                        ],
+                        row[
+                            "live_completed"
+                        ],
+                        row[
+                            "live_hits"
+                        ],
+                        row[
+                            "live_incomplete"
+                        ],
+                        row[
+                            "status"
+                        ],
+                    )
+                    for row
+                    in state.get(
+                        "rows",
+                        [],
+                    )
+                ),
+            )
+        )
+
+    return tuple(
+        result
+    )
+
+
 def build_micro_atlas(
     connection,
 ):

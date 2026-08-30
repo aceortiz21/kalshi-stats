@@ -496,6 +496,30 @@ def label_micro_opportunity(
         after_ts=entry_ts,
     )
 
+    # Only target hits observed before the first
+    # >5-second quote-path gap are trustworthy.
+    trustworthy_path = []
+
+    previous_ts = entry_ts
+
+    for row in path:
+        row_ts = int(
+            row["ts"]
+        )
+
+        if (
+            row_ts
+            - previous_ts
+            > MAX_PATH_GAP_MS
+        ):
+            break
+
+        trustworthy_path.append(
+            row
+        )
+
+        previous_ts = row_ts
+
     changed = 0
 
     for target in pending_targets:
@@ -507,7 +531,7 @@ def label_micro_opportunity(
 
         hit_row = None
 
-        for row in path:
+        for row in trustworthy_path:
             bid = float(
                 row[
                     f"{side}_bid"

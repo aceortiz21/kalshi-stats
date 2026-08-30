@@ -23,6 +23,11 @@ from .personal_performance import (
     build_personal_performance,
     personal_performance_signature,
 )
+
+from .micro_atlas import (
+    build_live_micro_state,
+    live_micro_states_signature,
+)
 from .reporting import render_live_market_fragment
 from .sync import (
     discover_pending_finalizations,
@@ -222,6 +227,62 @@ def brti_state_signature(
     )
 
 
+
+def load_live_micro_states(
+    connection,
+    views,
+):
+    states = {}
+
+    for view in views:
+        entry = (
+            view.ask_price
+            if view.ask_price is not None
+            else view.current_price
+        )
+
+        if entry is None:
+            continue
+
+        entry = float(
+            entry
+        )
+
+        if not (
+            .001
+            <= entry
+            <= .10
+        ):
+            continue
+
+        state = build_live_micro_state(
+            connection,
+            market_ticker=(
+                view.market_ticker
+            ),
+            side=view.side,
+            entry_ask=entry,
+            seconds_remaining=(
+                view.seconds_remaining
+            ),
+        )
+
+        if state is not None:
+            states[
+                (
+                    str(
+                        view.market_ticker
+                    ),
+                    str(
+                        view.side
+                    ).lower(),
+                )
+            ] = state
+
+    return states
+
+
+
 async def run_websocket_live_loop(
     *,
     connection,
@@ -310,6 +371,8 @@ async def run_websocket_live_loop(
 
     personal_state = None
     last_personal_check = 0.0
+
+    micro_states = {}
 
     finalization_task = None
     finalization_ticker: str | None = None
@@ -779,6 +842,7 @@ async def run_websocket_live_loop(
                 current_market_ticker = None
                 ws_connected = False
                 brti_state = None
+                micro_states = {}
 
                 refresh_health(
                     force=True
@@ -791,6 +855,7 @@ async def run_websocket_live_loop(
                     health=health_state,
                     brti=brti_state,
                     personal=personal_state,
+                    micro_states=micro_states,
                 )
 
                 if previous_market is not None:
@@ -858,6 +923,13 @@ async def run_websocket_live_loop(
                 quote_ts_ms=quote_ts_ms,
             )
 
+            micro_states = (
+                load_live_micro_states(
+                    connection,
+                    views,
+                )
+            )
+
             brti_state = load_live_brti_state(
                 connection,
                 ticker,
@@ -876,6 +948,7 @@ async def run_websocket_live_loop(
                 health=health_state,
                 brti=brti_state,
                 personal=personal_state,
+                micro_states=micro_states,
             )
 
             close_ts = (
@@ -1029,6 +1102,13 @@ async def run_websocket_live_loop(
                             ),
                         )
 
+                        micro_states = (
+                            load_live_micro_states(
+                                connection,
+                                views,
+                            )
+                        )
+
                         brti_state = load_live_brti_state(
                             connection,
                             ticker,
@@ -1065,6 +1145,10 @@ async def run_websocket_live_loop(
                             personal_performance_signature(
                                 personal_state
                             ),
+
+                            live_micro_states_signature(
+                                micro_states
+                            ),
                             tuple(
                                 (
                                     view.side,
@@ -1088,6 +1172,7 @@ async def run_websocket_live_loop(
                                 health=health_state,
                                 brti=brti_state,
                                 personal=personal_state,
+                                micro_states=micro_states,
                             )
 
                             last_signature = (

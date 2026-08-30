@@ -240,3 +240,88 @@ def test_micro_target_uses_future_executable_bid():
 
     finally:
         connection.close()
+
+
+def test_micro_target_does_not_cross_data_gap():
+    connection = connect(
+        ":memory:"
+    )
+
+    try:
+        init_db(
+            connection
+        )
+
+        connection.execute(
+            """
+            INSERT INTO markets (
+                ticker,
+                series_ticker,
+                result,
+                close_time
+            )
+            VALUES (
+                'MICRO',
+                'KXBTC15M',
+                'yes',
+                '1970-01-01T00:16:47Z'
+            )
+            """
+        )
+
+        insert_feature(
+            connection,
+            ts=1_000_000,
+            yes_bid=.007,
+            yes_ask=.008,
+            seconds_remaining=150,
+        )
+
+        record_micro_opportunities(
+            connection,
+            now_ms=1_000_000,
+        )
+
+        # Seven-second hole before the apparent rebound.
+        # We cannot prove when the target was first
+        # executable inside the missing interval.
+        insert_feature(
+            connection,
+            ts=1_007_000,
+            yes_bid=.020,
+            yes_ask=.021,
+            seconds_remaining=143,
+        )
+
+        label_micro_opportunities(
+            connection
+        )
+
+        row = connection.execute(
+            """
+            SELECT targets.*
+
+            FROM micro_multiplier_targets
+                AS targets
+
+            JOIN micro_multiplier_opportunities
+                AS opportunities
+
+              ON opportunities.micro_opportunity_id
+                 =
+                 targets.micro_opportunity_id
+
+            WHERE ABS(
+                targets.target_price
+                - .020
+            ) < .0000001
+            """
+        ).fetchone()
+
+        assert (
+            row["status"]
+            == "INCOMPLETE"
+        )
+
+    finally:
+        connection.close()
