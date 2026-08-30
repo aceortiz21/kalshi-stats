@@ -491,3 +491,139 @@ def test_reentry_after_sustained_exit_creates_new_episode():
 
     finally:
         connection.close()
+
+
+def test_current_main_strategy_uses_tp25():
+    from kalshi_stats.database import (
+        connect,
+        init_db,
+    )
+
+    from kalshi_stats.prospective_logger import (
+        STRATEGY_ID,
+        label_pending_opportunities,
+    )
+
+    connection = connect(
+        ":memory:"
+    )
+
+    try:
+        init_db(
+            connection
+        )
+
+        connection.execute(
+            """
+            INSERT INTO markets (
+                ticker,
+                series_ticker
+            )
+            VALUES (
+                'TEST',
+                'KXBTC15M'
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            INSERT INTO prospective_opportunities (
+                strategy_id,
+                market_ticker,
+                side,
+
+                detected_at_ms,
+                market_feature_ts,
+
+                entry_bid,
+                entry_ask,
+                seconds_remaining,
+
+                threshold,
+                spot
+            )
+            VALUES (
+                ?,
+                'TEST',
+                'yes',
+
+                1000000,
+                1000000,
+
+                .64,
+                .65,
+                400,
+
+                100000,
+                100000
+            )
+            """,
+            (
+                STRATEGY_ID,
+            ),
+        )
+
+        _insert_feature(
+            connection,
+            ts=1_001_000,
+            yes_bid=.80,
+            yes_ask=.81,
+        )
+
+        # +15c would have exited here.
+        # The frozen +25c strategy must keep going.
+        assert (
+            label_pending_opportunities(
+                connection
+            )
+            == 0
+        )
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM prospective_opportunities
+            """
+        ).fetchone()
+
+        assert (
+            row["label_status"]
+            == "PENDING"
+        )
+
+        _insert_feature(
+            connection,
+            ts=1_002_000,
+            yes_bid=.90,
+            yes_ask=.91,
+        )
+
+        assert (
+            label_pending_opportunities(
+                connection
+            )
+            == 1
+        )
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM prospective_opportunities
+            """
+        ).fetchone()
+
+        assert (
+            row["first_hit"]
+            == "TP"
+        )
+
+        assert round(
+            row[
+                "gross_profit_per_contract"
+            ],
+            4,
+        ) == .25
+
+    finally:
+        connection.close()

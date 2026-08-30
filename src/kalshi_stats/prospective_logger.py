@@ -12,11 +12,20 @@ from .database import (
     init_db,
 )
 
+from .micro_multiplier import (
+    label_micro_opportunities,
+    record_micro_opportunities,
+)
 
-STRATEGY_ID = "60-69c_5-10m_tp15_sl5"
+
+LEGACY_STRATEGY_ID = "60-69c_5-10m_tp15_sl5"
+STRATEGY_ID = "60-69c_5-10m_tp25_sl5"
 
 PRICE_LOW = 0.60
 PRICE_HIGH = 0.69
+
+TP_CENTS = 25
+SL_CENTS = 5
 
 TIME_LOW = 300
 TIME_HIGH = 599
@@ -28,6 +37,43 @@ MAX_BRTI_AGE_MS = 5000
 # genuinely new setup. Require a sustained exit before
 # a re-entry becomes a new prospective episode.
 EPISODE_REENTRY_GAP_MS = 10_000
+
+
+
+def strategy_exit_offsets(
+    strategy_id,
+):
+    """
+    Preserve historical meaning across logger versions.
+
+    The old prospective rows remain +15/-5.
+    The active frozen strategy is +25/-5.
+    """
+
+    strategy_id = str(
+        strategy_id
+    )
+
+    if strategy_id == STRATEGY_ID:
+        return (
+            TP_CENTS / 100.0,
+            SL_CENTS / 100.0,
+        )
+
+    if strategy_id in {
+        LEGACY_STRATEGY_ID,
+        "TEST_STRATEGY",
+    }:
+        return (
+            0.15,
+            0.05,
+        )
+
+    raise ValueError(
+        "Unknown prospective strategy_id: "
+        f"{strategy_id}"
+    )
+
 
 
 def iso_to_ms(value):
@@ -1469,7 +1515,7 @@ def label_one_opportunity(
     opportunity,
 ):
     """
-    Label a prospective TP +15c / SL -5c setup.
+    Label a versioned prospective main-strategy setup.
 
     Entry uses the executable ask captured when the
     opportunity appeared.
@@ -1508,14 +1554,22 @@ def label_one_opportunity(
         ]
     )
 
+    tp_delta, sl_delta = (
+        strategy_exit_offsets(
+            opportunity[
+                "strategy_id"
+            ]
+        )
+    )
+
     tp_price = (
         entry_price
-        + 0.15
+        + tp_delta
     )
 
     sl_price = (
         entry_price
-        - 0.05
+        - sl_delta
     )
 
     path = future_market_path(
@@ -1791,6 +1845,13 @@ def run_once(
         )
     )
 
+    micro_opportunities = (
+        record_micro_opportunities(
+            connection,
+            now_ms=now_ms,
+        )
+    )
+
     fills = record_fill_snapshots(
         connection,
         now_ms=now_ms,
@@ -1802,14 +1863,26 @@ def run_once(
         )
     )
 
+    micro_labels = (
+        label_micro_opportunities(
+            connection
+        )
+    )
+
     connection.commit()
 
     return {
         "opportunities": (
             opportunities
         ),
+        "micro_opportunities": (
+            micro_opportunities
+        ),
         "fills": fills,
         "labels": labels,
+        "micro_labels": (
+            micro_labels
+        ),
     }
 
 

@@ -351,6 +351,86 @@ CREATE TABLE IF NOT EXISTS prospective_episode_state (
 );
 
 
+
+CREATE TABLE IF NOT EXISTS micro_multiplier_opportunities (
+    micro_opportunity_id INTEGER
+        PRIMARY KEY AUTOINCREMENT,
+
+    market_ticker TEXT NOT NULL,
+    side TEXT NOT NULL,
+
+    detected_at_ms INTEGER NOT NULL,
+    market_feature_ts INTEGER NOT NULL,
+
+    entry_price_key INTEGER NOT NULL,
+
+    entry_bid REAL NOT NULL,
+    entry_ask REAL NOT NULL,
+
+    seconds_remaining REAL NOT NULL,
+    time_bucket TEXT NOT NULL,
+
+    label_status TEXT NOT NULL
+        DEFAULT 'PENDING',
+
+    settlement_result TEXT,
+    path_complete INTEGER,
+
+    UNIQUE (
+        market_ticker,
+        side,
+        entry_price_key,
+        time_bucket
+    )
+);
+
+CREATE INDEX IF NOT EXISTS
+idx_micro_multiplier_opportunities_time
+ON micro_multiplier_opportunities (
+    detected_at_ms
+);
+
+CREATE INDEX IF NOT EXISTS
+idx_micro_multiplier_opportunities_market
+ON micro_multiplier_opportunities (
+    market_ticker,
+    side
+);
+
+
+CREATE TABLE IF NOT EXISTS micro_multiplier_targets (
+    micro_opportunity_id INTEGER NOT NULL,
+
+    target_price REAL NOT NULL,
+    multiplier REAL NOT NULL,
+
+    status TEXT NOT NULL
+        DEFAULT 'PENDING',
+
+    hit_ts_ms INTEGER,
+    hit_bid REAL,
+
+    PRIMARY KEY (
+        micro_opportunity_id,
+        target_price
+    ),
+
+    FOREIGN KEY (
+        micro_opportunity_id
+    )
+    REFERENCES micro_multiplier_opportunities(
+        micro_opportunity_id
+    )
+);
+
+CREATE INDEX IF NOT EXISTS
+idx_micro_multiplier_targets_status
+ON micro_multiplier_targets (
+    status
+);
+
+
+
 CREATE TABLE IF NOT EXISTS fill_feature_snapshots (
     fill_id TEXT PRIMARY KEY,
 
