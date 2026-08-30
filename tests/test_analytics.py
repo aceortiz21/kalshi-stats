@@ -508,3 +508,54 @@ def test_walk_forward_requires_repeated_qualification_for_robust():
         )
         == "MIXED"
     )
+
+
+
+def test_holm_adjust_pvalues_controls_family():
+    from kalshi_stats.analytics import (
+        holm_adjust_pvalues,
+    )
+
+    adjusted = holm_adjust_pvalues(
+        [
+            ("a", 0.001),
+            ("b", 0.010),
+            ("c", 0.040),
+        ]
+    )
+
+    assert abs(
+        adjusted["a"] - 0.003
+    ) < 1e-12
+
+    assert abs(
+        adjusted["b"] - 0.020
+    ) < 1e-12
+
+    assert abs(
+        adjusted["c"] - 0.040
+    ) < 1e-12
+
+
+def test_one_sided_mean_p_value_can_test_effect_floor():
+    from types import SimpleNamespace
+
+    from kalshi_stats.analytics import (
+        one_sided_mean_p_value,
+    )
+
+    summary = SimpleNamespace(
+        observations=400,
+        avg_profit=0.010,
+        profit_stddev=0.020,
+    )
+
+    p_value = (
+        one_sided_mean_p_value(
+            summary,
+            null_mean=0.005,
+        )
+    )
+
+    assert p_value is not None
+    assert p_value < 0.0001

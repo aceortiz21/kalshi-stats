@@ -2397,3 +2397,128 @@ def build_walk_forward_strategies(
     )
 
     return results
+
+
+
+def one_sided_mean_p_value(
+    summary,
+    *,
+    null_mean: float = 0.0,
+) -> float | None:
+    """
+    Normal-approximation one-sided p-value for:
+
+        H0: mean <= null_mean
+        H1: mean > null_mean
+
+    Used only on adequately sized strategy samples.
+    """
+
+    from math import erfc, sqrt
+
+    if (
+        summary.observations < 2
+        or summary.avg_profit is None
+        or summary.profit_stddev is None
+    ):
+        return None
+
+    stddev = float(
+        summary.profit_stddev
+    )
+
+    avg = float(
+        summary.avg_profit
+    )
+
+    if stddev == 0:
+        return (
+            0.0
+            if avg > null_mean
+            else 1.0
+        )
+
+    standard_error = (
+        stddev
+        / sqrt(
+            summary.observations
+        )
+    )
+
+    if standard_error <= 0:
+        return None
+
+    z = (
+        avg - null_mean
+    ) / standard_error
+
+    # upper-tail probability
+    return 0.5 * erfc(
+        z / sqrt(2.0)
+    )
+
+
+def holm_adjust_pvalues(
+    items,
+):
+    """
+    Holm-Bonferroni family-wise error correction.
+
+    items:
+        iterable of (stable_key, raw_p_value)
+
+    Returns:
+        dict[stable_key, adjusted_p_value]
+    """
+
+    valid = [
+        (
+            key,
+            min(
+                1.0,
+                max(
+                    0.0,
+                    float(p_value),
+                ),
+            ),
+        )
+        for key, p_value in items
+        if p_value is not None
+    ]
+
+    ordered = sorted(
+        valid,
+        key=lambda item: (
+            item[1],
+            str(item[0]),
+        ),
+    )
+
+    count = len(ordered)
+
+    adjusted = {}
+    running_max = 0.0
+
+    for index, (
+        key,
+        raw_p,
+    ) in enumerate(ordered):
+        multiplier = (
+            count - index
+        )
+
+        candidate = min(
+            1.0,
+            raw_p * multiplier,
+        )
+
+        running_max = max(
+            running_max,
+            candidate,
+        )
+
+        adjusted[key] = (
+            running_max
+        )
+
+    return adjusted
