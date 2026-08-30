@@ -14,8 +14,160 @@ from .database import (
 )
 
 
-FEATURE_VERSION = 1
+FEATURE_VERSION = 2
 DEFAULT_BTC_SOURCE = "binance_1s"
+
+
+
+class MinuteEMAEngine:
+    """EMA state based on completed one-minute BTC bars."""
+
+    def __init__(self):
+        self.ema_5 = None
+        self.ema_9 = None
+        self.ema_21 = None
+
+        self.previous_ema_5 = None
+        self.previous_ema_9 = None
+        self.previous_ema_21 = None
+
+        self.last_minute_end_ms = None
+
+    @staticmethod
+    def _next_ema(
+        previous,
+        price: float,
+        period: int,
+    ) -> float:
+        if previous is None:
+            return float(price)
+
+        alpha = (
+            2.0
+            / (period + 1.0)
+        )
+
+        return (
+            alpha * float(price)
+            + (1.0 - alpha)
+            * float(previous)
+        )
+
+    @staticmethod
+    def _spread_bps(
+        faster,
+        slower,
+    ):
+        if (
+            faster is None
+            or slower is None
+            or slower == 0
+        ):
+            return None
+
+        return (
+            (faster - slower)
+            / slower
+            * 10000.0
+        )
+
+    @staticmethod
+    def _slope_bps(
+        current,
+        previous,
+    ):
+        if (
+            current is None
+            or previous is None
+            or previous == 0
+        ):
+            return None
+
+        return (
+            (current - previous)
+            / previous
+            * 10000.0
+        )
+
+    def add_completed_minute(
+        self,
+        *,
+        minute_end_ms: int,
+        close: float,
+    ) -> None:
+        if (
+            self.last_minute_end_ms
+            == minute_end_ms
+        ):
+            return
+
+        self.previous_ema_5 = self.ema_5
+        self.previous_ema_9 = self.ema_9
+        self.previous_ema_21 = self.ema_21
+
+        self.ema_5 = self._next_ema(
+            self.ema_5,
+            close,
+            5,
+        )
+
+        self.ema_9 = self._next_ema(
+            self.ema_9,
+            close,
+            9,
+        )
+
+        self.ema_21 = self._next_ema(
+            self.ema_21,
+            close,
+            21,
+        )
+
+        self.last_minute_end_ms = (
+            minute_end_ms
+        )
+
+    def snapshot(self):
+        return {
+            "ema_5m": self.ema_5,
+            "ema_9m": self.ema_9,
+            "ema_21m": self.ema_21,
+
+            "ema_5m_9m_bps": (
+                self._spread_bps(
+                    self.ema_5,
+                    self.ema_9,
+                )
+            ),
+
+            "ema_9m_21m_bps": (
+                self._spread_bps(
+                    self.ema_9,
+                    self.ema_21,
+                )
+            ),
+
+            "ema_5m_slope_bps": (
+                self._slope_bps(
+                    self.ema_5,
+                    self.previous_ema_5,
+                )
+            ),
+
+            "ema_9m_slope_bps": (
+                self._slope_bps(
+                    self.ema_9,
+                    self.previous_ema_9,
+                )
+            ),
+
+            "ema_21m_slope_bps": (
+                self._slope_bps(
+                    self.ema_21,
+                    self.previous_ema_21,
+                )
+            ),
+        }
 
 
 INSERT_COLUMNS = (
@@ -63,6 +215,17 @@ INSERT_COLUMNS = (
     "ema_5s_slope_bps",
     "ema_9s_slope_bps",
     "ema_21s_slope_bps",
+
+    "ema_5m",
+    "ema_9m",
+    "ema_21m",
+
+    "ema_5m_9m_bps",
+    "ema_9m_21m_bps",
+
+    "ema_5m_slope_bps",
+    "ema_9m_slope_bps",
+    "ema_21m_slope_bps",
 
     "vwap_60s_proxy",
     "vwap_300s_proxy",
@@ -258,6 +421,7 @@ def build_historical_feature_row(
     *,
     observation,
     btc_snapshot,
+    minute_ema_snapshot,
     btc_ts: int,
     btc_source: str,
 ):
@@ -496,6 +660,54 @@ def build_historical_feature_row(
             ]
         ),
 
+        "ema_5m": (
+            minute_ema_snapshot[
+                "ema_5m"
+            ]
+        ),
+
+        "ema_9m": (
+            minute_ema_snapshot[
+                "ema_9m"
+            ]
+        ),
+
+        "ema_21m": (
+            minute_ema_snapshot[
+                "ema_21m"
+            ]
+        ),
+
+        "ema_5m_9m_bps": (
+            minute_ema_snapshot[
+                "ema_5m_9m_bps"
+            ]
+        ),
+
+        "ema_9m_21m_bps": (
+            minute_ema_snapshot[
+                "ema_9m_21m_bps"
+            ]
+        ),
+
+        "ema_5m_slope_bps": (
+            minute_ema_snapshot[
+                "ema_5m_slope_bps"
+            ]
+        ),
+
+        "ema_9m_slope_bps": (
+            minute_ema_snapshot[
+                "ema_9m_slope_bps"
+            ]
+        ),
+
+        "ema_21m_slope_bps": (
+            minute_ema_snapshot[
+                "ema_21m_slope_bps"
+            ]
+        ),
+
         # Historical Binance archives give us OHLCV,
         # not individual trades. We feed each completed
         # second's close/volume into the same rolling
@@ -644,12 +856,12 @@ def materialize_historical_features(
         * 1000
     )
 
-    # 15 minutes of warmup is much more
-    # than needed by the current 21-second
-    # longest EMA.
+    # Six hours of warmup makes the seed effect on
+    # the 21-minute EMA negligible while remaining
+    # very cheap relative to the full BTC history.
     btc_start_ms = (
         first_observed_ms
-        - 900_000
+        - 6 * 60 * 60 * 1000
     )
 
     # STRICT ANTI-LOOKAHEAD:
@@ -693,6 +905,10 @@ def materialize_historical_features(
 
     engine = BTCFeatureEngine(
         max_window_seconds=900
+    )
+
+    minute_engine = (
+        MinuteEMAEngine()
     )
 
     next_btc = cursor.fetchone()
@@ -778,6 +994,20 @@ def materialize_historical_features(
                 aggressor="unknown",
             )
 
+            # A Binance second beginning at XX:XX:59
+            # completes the UTC minute at the next
+            # exact minute boundary.
+            if (
+                ts_ms % 60_000
+                == 59_000
+            ):
+                minute_engine.add_completed_minute(
+                    minute_end_ms=(
+                        ts_ms + 1000
+                    ),
+                    close=close,
+                )
+
             last_btc_ts = ts_ms
             last_btc_close = close
 
@@ -817,6 +1047,9 @@ def materialize_historical_features(
                 ),
                 btc_snapshot=(
                     snapshot
+                ),
+                minute_ema_snapshot=(
+                    minute_engine.snapshot()
                 ),
                 btc_ts=(
                     last_btc_ts

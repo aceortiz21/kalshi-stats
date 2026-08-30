@@ -192,6 +192,17 @@ CREATE TABLE IF NOT EXISTS historical_market_features (
     ema_9s_slope_bps REAL,
     ema_21s_slope_bps REAL,
 
+    ema_5m REAL,
+    ema_9m REAL,
+    ema_21m REAL,
+
+    ema_5m_9m_bps REAL,
+    ema_9m_21m_bps REAL,
+
+    ema_5m_slope_bps REAL,
+    ema_9m_slope_bps REAL,
+    ema_21m_slope_bps REAL,
+
     vwap_60s_proxy REAL,
     vwap_300s_proxy REAL,
 

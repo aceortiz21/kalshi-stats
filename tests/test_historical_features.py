@@ -352,3 +352,49 @@ def test_threshold_distance_is_materialized():
 
     finally:
         connection.close()
+
+
+
+def test_minute_ema_uses_only_completed_minutes():
+    from kalshi_stats.historical_features import (
+        MinuteEMAEngine,
+    )
+
+    engine = MinuteEMAEngine()
+
+    engine.add_completed_minute(
+        minute_end_ms=60_000,
+        close=100.0,
+    )
+
+    first = engine.snapshot()
+
+    assert first["ema_5m"] == 100.0
+    assert first["ema_9m"] == 100.0
+    assert first["ema_21m"] == 100.0
+
+    engine.add_completed_minute(
+        minute_end_ms=120_000,
+        close=110.0,
+    )
+
+    second = engine.snapshot()
+
+    assert (
+        second["ema_5m"]
+        > second["ema_9m"]
+        > second["ema_21m"]
+    )
+
+    # Duplicate completion event cannot advance EMA twice.
+    before = second["ema_5m"]
+
+    engine.add_completed_minute(
+        minute_end_ms=120_000,
+        close=999.0,
+    )
+
+    assert (
+        engine.snapshot()["ema_5m"]
+        == before
+    )
