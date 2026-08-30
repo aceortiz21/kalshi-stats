@@ -42,7 +42,7 @@ def _download_day(day: date) -> list[tuple[int, str, float, float, float, float,
                 open_time_ms = int(row[0])
                 rows.append(
                     (
-                        open_time_ms // 1000,
+                        open_time_ms,
                         "binance_1s",
                         float(row[1]),
                         float(row[2]),
