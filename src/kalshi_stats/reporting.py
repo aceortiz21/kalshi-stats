@@ -503,6 +503,8 @@ def _health_age(
 def _render_health_strip(
     health,
 ) -> str:
+    """Render low-prominence operational status."""
+
     if not health:
         return ""
 
@@ -514,11 +516,9 @@ def _render_health_strip(
     )
 
     ws_text = (
-        "CONNECTED"
-        if health.get(
-            "ws_connected"
-        )
-        else "RECONNECTING"
+        "WS CONNECTED"
+        if health.get("ws_connected")
+        else "WS RECONNECTING"
     )
 
     latency = health.get(
@@ -587,50 +587,12 @@ def _render_health_strip(
         or 0
     )
 
-    model_markets = int(
-        health.get(
-            "model_market_count",
-            0,
-        )
-        or 0
-    )
-
-    strong = int(
-        health.get(
-            "strong_strategies",
-            0,
-        )
-        or 0
-    )
-
     model_pending = int(
         health.get(
             "model_pending",
             0,
         )
         or 0
-    )
-
-    rebuild_after = int(
-        health.get(
-            "auto_rebuild_after",
-            0,
-        )
-        or 0
-    )
-
-    model_age = _health_age(
-        health.get(
-            "model_age_seconds"
-        )
-    )
-
-    rebuild_text = (
-        " · REBUILDING"
-        if health.get(
-            "model_rebuild_running"
-        )
-        else ""
     )
 
     issues = health.get(
@@ -642,95 +604,420 @@ def _render_health_strip(
 
     if issues:
         issue_text = " · ".join(
-            html.escape(
-                str(issue)
-            )
+            html.escape(str(issue))
             for issue in issues[:2]
         )
 
         issue_html = (
-            '<div style="margin-top:6px; '
-            'font-size:12px;">'
-            f'{issue_text}'
-            '</div>'
+            '<span style="font-weight:700;">'
+            f' · {issue_text}'
+            '</span>'
         )
 
     return f"""
     <div style="
-        border:1px solid rgba(127,127,127,.35);
-        border-radius:10px;
-        padding:10px 12px;
         margin:0 0 10px 0;
-        font-size:13px;
-        line-height:1.45;
+        padding:5px 8px;
+        border-bottom:
+            1px solid rgba(127,127,127,.22);
+        font-size:11px;
+        line-height:1.35;
+        opacity:.72;
     ">
-      <div style="
-          display:flex;
-          gap:12px;
-          flex-wrap:wrap;
-          align-items:center;
-      ">
-        <strong>
-          DATA HEALTH: {html.escape(status)}
-        </strong>
-        <span>
-          WS {ws_text} · {latency_text}
-        </span>
-        <span>
-          24H MARKETS {recent}/{expected}
-        </span>
-        <span>
-          CANDLES {complete}/{settled}
-        </span>
-        <span>
-          HIGH-RES {quote_markets}
-        </span>
-        <span>
-          PENDING {pending}
-        </span>
-      </div>
-
-      <div style="
-          margin-top:5px;
-          font-size:12px;
-          opacity:.82;
-      ">
-        MODEL v{model_number}
-        · {model_markets:,} markets
-        · {strong} STRONG
-        · {model_pending}/{rebuild_after} new
-        · age {model_age}
-        {rebuild_text}
-      </div>
-
+      <strong>
+        DATA {html.escape(status)}
+      </strong>
+      · {ws_text} {latency_text}
+      · MARKETS {recent}/{expected}
+      · CANDLES {complete}/{settled}
+      · HIGH-RES {quote_markets}
+      · PENDING {pending}
+      · MODEL v{model_number}
+      · NEW {model_pending}
       {issue_html}
     </div>
     """
 
+
+def _render_brti_strip(
+    brti,
+) -> str:
+    if not brti:
+        return ""
+
+    def money(value) -> str:
+        if value is None:
+            return "-"
+        return f"${float(value):,.2f}"
+
+    def delta(value) -> str:
+        if value is None:
+            return "-"
+        return f"{float(value):+,.2f}"
+
+    def bps(value) -> str:
+        if value is None:
+            return "-"
+        return f"{float(value):+.2f} bps"
+
+    target = brti.get(
+        "target"
+    )
+
+    value = brti.get(
+        "value"
+    )
+
+    age_ms = brti.get(
+        "age_ms"
+    )
+
+    if age_ms is None:
+        feed_state = "WAITING"
+        age_text = "-"
+    else:
+        age_ms = int(
+            age_ms
+        )
+
+        age_text = (
+            f"{age_ms}ms"
+            if age_ms < 1000
+            else f"{age_ms / 1000:.1f}s"
+        )
+
+        feed_state = (
+            "LIVE"
+            if age_ms <= 5000
+            else "STALE"
+        )
+
+    distance = brti.get(
+        "distance_dollars"
+    )
+
+    distance_text = (
+        "-"
+        if distance is None
+        else (
+            f"{float(distance):+,.2f} "
+            f"· {bps(brti.get('distance_bps'))}"
+        )
+    )
+
+    avg60 = brti.get(
+        "avg_60s_value"
+    )
+
+    n60 = brti.get(
+        "avg_60s_window_size"
+    )
+
+    avg60_text = money(
+        avg60
+    )
+
+    if n60 is not None:
+        avg60_text += (
+            f" · {int(n60)}/60"
+        )
+
+    final_avg = brti.get(
+        "final_60s_avg_15m"
+    )
+
+    final_n = brti.get(
+        "final_60s_window_size_15m"
+    )
+
+    if final_avg is None:
+        settlement_html = """
+        <div>
+          <span style="
+              display:block;
+              font-size:11px;
+              opacity:.72;
+              text-transform:uppercase;
+              letter-spacing:.06em;
+          ">
+            Final settlement avg
+          </span>
+          <strong>
+            Waiting for final minute
+          </strong>
+        </div>
+        """
+    else:
+        final_distance = brti.get(
+            "final_distance_dollars"
+        )
+
+        final_distance_text = (
+            "-"
+            if final_distance is None
+            else (
+                f"{float(final_distance):+,.2f} "
+                f"· "
+                f"{bps(brti.get('final_distance_bps'))}"
+            )
+        )
+
+        settlement_html = f"""
+        <div>
+          <span style="
+              display:block;
+              font-size:11px;
+              opacity:.72;
+              text-transform:uppercase;
+              letter-spacing:.06em;
+          ">
+            Official settlement avg
+          </span>
+          <strong>
+            {money(final_avg)}
+          </strong>
+        </div>
+
+        <div>
+          <span style="
+              display:block;
+              font-size:11px;
+              opacity:.72;
+              text-transform:uppercase;
+              letter-spacing:.06em;
+          ">
+            Settlement avg vs target
+          </span>
+          <strong>
+            {final_distance_text}
+          </strong>
+        </div>
+
+        <div>
+          <span style="
+              display:block;
+              font-size:11px;
+              opacity:.72;
+              text-transform:uppercase;
+              letter-spacing:.06em;
+          ">
+            Settlement window
+          </span>
+          <strong>
+            {int(final_n or 0)} / 60
+          </strong>
+        </div>
+        """
+
+    return f"""
+    <section style="
+        border:1px solid rgba(127,127,127,.35);
+        border-radius:10px;
+        padding:12px;
+        margin:0 0 12px 0;
+    ">
+      <div style="
+          display:flex;
+          justify-content:space-between;
+          align-items:center;
+          gap:12px;
+          margin-bottom:10px;
+          flex-wrap:wrap;
+      ">
+        <div>
+          <strong>
+            OFFICIAL KALSHI BRTI
+          </strong>
+          <div style="
+              font-size:12px;
+              opacity:.72;
+              margin-top:2px;
+          ">
+            CF Benchmarks settlement feed
+          </div>
+        </div>
+
+        <div style="
+            font-size:12px;
+            font-weight:700;
+        ">
+          {feed_state} · age {age_text}
+        </div>
+      </div>
+
+      <div style="
+          display:grid;
+          grid-template-columns:
+              repeat(auto-fit, minmax(155px, 1fr));
+          gap:10px;
+      ">
+        <div>
+          <span style="
+              display:block;
+              font-size:11px;
+              opacity:.72;
+              text-transform:uppercase;
+              letter-spacing:.06em;
+          ">
+            BRTI
+          </span>
+          <strong>
+            {money(value)}
+          </strong>
+        </div>
+
+        <div>
+          <span style="
+              display:block;
+              font-size:11px;
+              opacity:.72;
+              text-transform:uppercase;
+              letter-spacing:.06em;
+          ">
+            Kalshi target
+          </span>
+          <strong>
+            {money(target)}
+          </strong>
+        </div>
+
+        <div>
+          <span style="
+              display:block;
+              font-size:11px;
+              opacity:.72;
+              text-transform:uppercase;
+              letter-spacing:.06em;
+          ">
+            BRTI vs target
+          </span>
+          <strong>
+            {distance_text}
+          </strong>
+        </div>
+
+        <div>
+          <span style="
+              display:block;
+              font-size:11px;
+              opacity:.72;
+              text-transform:uppercase;
+              letter-spacing:.06em;
+          ">
+            Trailing 60s avg
+          </span>
+          <strong>
+            {avg60_text}
+          </strong>
+        </div>
+
+        {settlement_html}
+      </div>
+    </section>
+    """
 
 def render_live_market_fragment(
     output_path: str | Path,
     active_views,
     validated_strategies,
     health=None,
+    brti=None,
 ) -> None:
-    """Write only the lightweight live market UI fragment."""
+    """Write only the lightweight live decision UI."""
 
     output = Path(output_path)
+
     output.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    rendered = (
-        _render_health_strip(
-            health
+    yes_views = [
+        view
+        for view in active_views
+        if view.side.lower() == "yes"
+    ]
+
+    no_views = [
+        view
+        for view in active_views
+        if view.side.lower() == "no"
+    ]
+
+    other_views = [
+        view
+        for view in active_views
+        if view.side.lower()
+        not in {"yes", "no"}
+    ]
+
+    primary_parts = []
+
+    if yes_views:
+        primary_parts.append(
+            render_live_decision_cards(
+                yes_views,
+                validated_strategies,
+            )
         )
-        + render_live_decision_cards(
-            active_views,
-            validated_strategies,
+
+    if brti:
+        primary_parts.append(
+            _render_brti_strip(
+                brti
+            )
         )
-    )
+
+    if no_views:
+        primary_parts.append(
+            render_live_decision_cards(
+                no_views,
+                validated_strategies,
+            )
+        )
+
+    if other_views:
+        primary_parts.append(
+            render_live_decision_cards(
+                other_views,
+                validated_strategies,
+            )
+        )
+
+    if primary_parts:
+        primary_html = "\n".join(
+            primary_parts
+        )
+    else:
+        primary_html = (
+            render_live_decision_cards(
+                [],
+                validated_strategies,
+            )
+        )
+
+    # One full-width root prevents the dashboard's outer
+    # grid from treating health/BRTI/cards as peer cells.
+    rendered = f"""
+    <div style="
+        grid-column:1 / -1;
+        width:100%;
+        min-width:0;
+    ">
+      {_render_health_strip(health)}
+
+      <div style="
+          display:grid;
+          grid-template-columns:
+              repeat(3, minmax(0, 1fr));
+          gap:12px;
+          align-items:start;
+          width:100%;
+      ">
+        {primary_html}
+      </div>
+    </div>
+    """
 
     temporary = output.with_name(
         output.name + ".tmp"
@@ -741,9 +1028,9 @@ def render_live_market_fragment(
         encoding="utf-8",
     )
 
-    temporary.replace(output)
-
-
+    temporary.replace(
+        output
+    )
 
 
 

@@ -29,6 +29,195 @@ from .sync import (
 )
 
 
+def load_live_brti_state(
+    connection,
+    market_ticker: str,
+    *,
+    now_ms: int | None = None,
+) -> dict[str, object] | None:
+    """Load the latest official BRTI state for a live market."""
+
+    market_row = connection.execute(
+        """
+        SELECT reference_price
+        FROM markets
+        WHERE ticker = ?
+        """,
+        (market_ticker,),
+    ).fetchone()
+
+    target = (
+        None
+        if market_row is None
+        or market_row["reference_price"] is None
+        else float(
+            market_row["reference_price"]
+        )
+    )
+
+    brti_row = connection.execute(
+        """
+        SELECT
+            ts,
+            value,
+            avg_60s_value,
+            avg_60s_window_size,
+            final_60s_avg_15m,
+            final_60s_window_size_15m
+        FROM brti_snapshots
+        WHERE index_id = 'BRTI'
+        ORDER BY ts DESC
+        LIMIT 1
+        """
+    ).fetchone()
+
+    if target is None and brti_row is None:
+        return None
+
+    state: dict[str, object] = {
+        "target": target,
+        "ts": None,
+        "age_ms": None,
+        "value": None,
+        "distance_dollars": None,
+        "distance_bps": None,
+        "avg_60s_value": None,
+        "avg_60s_window_size": None,
+        "final_60s_avg_15m": None,
+        "final_60s_window_size_15m": None,
+        "final_distance_dollars": None,
+        "final_distance_bps": None,
+    }
+
+    if brti_row is None:
+        return state
+
+    timestamp = int(
+        brti_row["ts"]
+    )
+
+    if now_ms is None:
+        now_ms = int(
+            time.time() * 1000
+        )
+
+    value = float(
+        brti_row["value"]
+    )
+
+    avg60 = (
+        None
+        if brti_row["avg_60s_value"] is None
+        else float(
+            brti_row["avg_60s_value"]
+        )
+    )
+
+    final_avg = (
+        None
+        if brti_row["final_60s_avg_15m"] is None
+        else float(
+            brti_row["final_60s_avg_15m"]
+        )
+    )
+
+    state.update(
+        {
+            "ts": timestamp,
+            "age_ms": max(
+                0,
+                now_ms - timestamp,
+            ),
+            "value": value,
+            "avg_60s_value": avg60,
+            "avg_60s_window_size": (
+                brti_row[
+                    "avg_60s_window_size"
+                ]
+            ),
+            "final_60s_avg_15m": final_avg,
+            "final_60s_window_size_15m": (
+                brti_row[
+                    "final_60s_window_size_15m"
+                ]
+            ),
+        }
+    )
+
+    if (
+        target is not None
+        and target != 0
+    ):
+        distance = (
+            value - target
+        )
+
+        state[
+            "distance_dollars"
+        ] = distance
+
+        state[
+            "distance_bps"
+        ] = (
+            distance
+            / target
+            * 10000.0
+        )
+
+        if final_avg is not None:
+            final_distance = (
+                final_avg - target
+            )
+
+            state[
+                "final_distance_dollars"
+            ] = final_distance
+
+            state[
+                "final_distance_bps"
+            ] = (
+                final_distance
+                / target
+                * 10000.0
+            )
+
+    return state
+
+
+def brti_state_signature(
+    state,
+):
+    if not state:
+        return None
+
+    def rounded(name):
+        value = state.get(name)
+
+        if value is None:
+            return None
+
+        return round(
+            float(value),
+            4,
+        )
+
+    return (
+        state.get("ts"),
+        rounded("target"),
+        rounded("value"),
+        rounded("avg_60s_value"),
+        state.get(
+            "avg_60s_window_size"
+        ),
+        rounded(
+            "final_60s_avg_15m"
+        ),
+        state.get(
+            "final_60s_window_size_15m"
+        ),
+    )
+
+
 async def run_websocket_live_loop(
     *,
     connection,
@@ -113,6 +302,7 @@ async def run_websocket_live_loop(
     current_market_ticker: str | None = None
     ws_connected = False
     last_event_latency_ms: int | None = None
+    brti_state: dict[str, object] | None = None
 
     finalization_task = None
     finalization_ticker: str | None = None
@@ -546,6 +736,7 @@ async def run_websocket_live_loop(
             if market is None:
                 current_market_ticker = None
                 ws_connected = False
+                brti_state = None
 
                 refresh_health(
                     force=True
@@ -556,6 +747,7 @@ async def run_websocket_live_loop(
                     [],
                     cache["validated_strategies"],
                     health=health_state,
+                    brti=brti_state,
                 )
 
                 if previous_market is not None:
@@ -621,6 +813,11 @@ async def run_websocket_live_loop(
                 yes_ask=yes_ask,
                 matrix=cache["matrix"],
                 quote_ts_ms=quote_ts_ms,
+            )
+
+            brti_state = load_live_brti_state(
+                connection,
+                ticker,
             )
 
             refresh_health(
@@ -786,6 +983,11 @@ async def run_websocket_live_loop(
                             ),
                         )
 
+                        brti_state = load_live_brti_state(
+                            connection,
+                            ticker,
+                        )
+
                         model_number = (
                             cache
                             .get(
@@ -811,6 +1013,9 @@ async def run_websocket_live_loop(
                             health_signature(
                                 health_state
                             ),
+                            brti_state_signature(
+                                brti_state
+                            ),
                             tuple(
                                 (
                                     view.side,
@@ -832,6 +1037,7 @@ async def run_websocket_live_loop(
                                     "validated_strategies"
                                 ],
                                 health=health_state,
+                                brti=brti_state,
                             )
 
                             last_signature = (
@@ -925,6 +1131,7 @@ async def run_websocket_live_loop(
                                 "validated_strategies"
                             ],
                             health=health_state,
+                            brti=brti_state,
                         )
                     except Exception:
                         pass
