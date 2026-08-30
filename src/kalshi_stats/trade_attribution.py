@@ -685,7 +685,9 @@ def build_trade_attribution(
             )
         ].append(session)
 
-    opportunity_rows = []
+    opportunities_by_market_side = (
+        defaultdict(list)
+    )
 
     for opportunity in opportunities:
         key = (
@@ -694,6 +696,7 @@ def build_trade_attribution(
                     "market_ticker"
                 ]
             ),
+
             str(
                 opportunity[
                     "side"
@@ -701,72 +704,216 @@ def build_trade_attribution(
             ).lower(),
         )
 
-        matching = (
+        opportunities_by_market_side[
+            key
+        ].append(
+            opportunity
+        )
+
+    opportunity_rows = []
+
+    # Allow a fill timestamp to precede the 1 Hz
+    # opportunity detection by a few seconds while still
+    # representing the exact same qualified state.
+    MATCH_LEAD_MS = 5000
+
+    for (
+        key,
+        grouped_opportunities,
+    ) in opportunities_by_market_side.items():
+
+        grouped_opportunities = sorted(
+            grouped_opportunities,
+            key=lambda row: (
+                int(
+                    row[
+                        "episode_number"
+                    ]
+                    or 1
+                ),
+                int(
+                    row[
+                        "detected_at_ms"
+                    ]
+                ),
+            ),
+        )
+
+        candidate_sessions = (
             qualified_sessions_by_market_side.get(
                 key,
                 [],
             )
         )
 
-        traded = bool(
-            matching
-        )
+        for (
+            index,
+            opportunity,
+        ) in enumerate(
+            grouped_opportunities
+        ):
+            start_ms = int(
+                opportunity[
+                    "episode_start_ms"
+                ]
+                or opportunity[
+                    "detected_at_ms"
+                ]
+            )
 
-        matched_session = (
-            matching[0]
-            if matching
-            else None
-        )
+            explicit_end = (
+                opportunity[
+                    "episode_end_ms"
+                ]
+            )
 
-        opportunity_rows.append(
-            {
-                "opportunity_id":
-                    opportunity[
-                        "opportunity_id"
-                    ],
+            next_start = None
 
-                "market_ticker":
-                    key[0],
+            if (
+                index + 1
+                < len(
+                    grouped_opportunities
+                )
+            ):
+                next_row = (
+                    grouped_opportunities[
+                        index + 1
+                    ]
+                )
 
-                "side":
-                    key[1],
-
-                "detected_at_ms":
-                    opportunity[
+                next_start = int(
+                    next_row[
+                        "episode_start_ms"
+                    ]
+                    or next_row[
                         "detected_at_ms"
-                    ],
+                    ]
+                )
 
-                "entry_ask":
-                    opportunity[
-                        "entry_ask"
-                    ],
+            if explicit_end is not None:
+                end_ms = int(
+                    explicit_end
+                )
 
-                "label_status":
-                    opportunity[
-                        "label_status"
-                    ],
+            elif next_start is not None:
+                end_ms = (
+                    next_start
+                    - 1
+                )
 
-                "first_hit":
-                    opportunity[
-                        "first_hit"
-                    ],
+            else:
+                end_ms = None
 
-                "gross_profit_per_contract":
-                    opportunity[
-                        "gross_profit_per_contract"
-                    ],
+            matching = []
 
-                "user_action":
-                    (
-                        "TRADED"
-                        if traded
-                        else "SKIPPED"
+            for session in candidate_sessions:
+                entry_ms = (
+                    session[
+                        "entry_ts_ms"
+                    ]
+                )
+
+                if entry_ms is None:
+                    continue
+
+                entry_ms = int(
+                    entry_ms
+                )
+
+                if (
+                    entry_ms
+                    < (
+                        start_ms
+                        - MATCH_LEAD_MS
+                    )
+                ):
+                    continue
+
+                if (
+                    end_ms is not None
+                    and entry_ms
+                    > end_ms
+                ):
+                    continue
+
+                matching.append(
+                    session
+                )
+
+            matched_session = (
+                min(
+                    matching,
+                    key=lambda row: abs(
+                        int(
+                            row[
+                                "entry_ts_ms"
+                            ]
+                        )
+                        - start_ms
                     ),
+                )
+                if matching
+                else None
+            )
 
-                "matched_session":
-                    matched_session,
-            }
-        )
+            opportunity_rows.append(
+                {
+                    "opportunity_id":
+                        opportunity[
+                            "opportunity_id"
+                        ],
+
+                    "episode_number":
+                        int(
+                            opportunity[
+                                "episode_number"
+                            ]
+                            or 1
+                        ),
+
+                    "market_ticker":
+                        key[0],
+
+                    "side":
+                        key[1],
+
+                    "detected_at_ms":
+                        opportunity[
+                            "detected_at_ms"
+                        ],
+
+                    "entry_ask":
+                        opportunity[
+                            "entry_ask"
+                        ],
+
+                    "label_status":
+                        opportunity[
+                            "label_status"
+                        ],
+
+                    "first_hit":
+                        opportunity[
+                            "first_hit"
+                        ],
+
+                    "gross_profit_per_contract":
+                        opportunity[
+                            "gross_profit_per_contract"
+                        ],
+
+                    "user_action":
+                        (
+                            "TRADED"
+                            if matched_session
+                            is not None
+                            else "SKIPPED"
+                        ),
+
+                    "matched_session":
+                        matched_session,
+                }
+            )
 
     traded_opportunities = [
         row

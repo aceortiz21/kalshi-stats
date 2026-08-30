@@ -348,3 +348,146 @@ def test_outcome_labeler_rejects_path_gap_before_hit():
 
     finally:
         connection.close()
+
+
+def test_reentry_after_sustained_exit_creates_new_episode():
+    from kalshi_stats.database import (
+        connect,
+        init_db,
+    )
+
+    from kalshi_stats.prospective_logger import (
+        record_opportunities,
+    )
+
+    connection = connect(
+        ":memory:"
+    )
+
+    try:
+        init_db(
+            connection
+        )
+
+        # Episode 1 begins.
+        _insert_feature(
+            connection,
+            ts=1_000_000,
+            yes_bid=.64,
+            yes_ask=.65,
+        )
+
+        assert (
+            record_opportunities(
+                connection,
+                now_ms=1_000_000,
+            )
+            == 1
+        )
+
+        # Still inside the same episode.
+        _insert_feature(
+            connection,
+            ts=1_001_000,
+            yes_bid=.65,
+            yes_ask=.66,
+        )
+
+        assert (
+            record_opportunities(
+                connection,
+                now_ms=1_001_000,
+            )
+            == 0
+        )
+
+        # Leave the setup.
+        _insert_feature(
+            connection,
+            ts=1_002_000,
+            yes_bid=.54,
+            yes_ask=.55,
+        )
+
+        record_opportunities(
+            connection,
+            now_ms=1_002_000,
+        )
+
+        # Remain outside for >10 seconds.
+        _insert_feature(
+            connection,
+            ts=1_013_000,
+            yes_bid=.54,
+            yes_ask=.55,
+        )
+
+        record_opportunities(
+            connection,
+            now_ms=1_013_000,
+        )
+
+        # Re-enter: this is episode 2.
+        _insert_feature(
+            connection,
+            ts=1_014_000,
+            yes_bid=.63,
+            yes_ask=.64,
+        )
+
+        assert (
+            record_opportunities(
+                connection,
+                now_ms=1_014_000,
+            )
+            == 1
+        )
+
+        rows = connection.execute(
+            """
+            SELECT
+                episode_number,
+                episode_start_ms,
+                episode_end_ms
+
+            FROM prospective_opportunities
+
+            WHERE market_ticker = 'TEST'
+              AND side = 'yes'
+
+            ORDER BY episode_number
+            """
+        ).fetchall()
+
+        assert len(rows) == 2
+
+        assert (
+            rows[0][
+                "episode_number"
+            ]
+            == 1
+        )
+
+        assert (
+            rows[0][
+                "episode_end_ms"
+            ]
+            == 1_002_000
+        )
+
+        assert (
+            rows[1][
+                "episode_number"
+            ]
+            == 2
+        )
+
+        assert (
+            rows[1][
+                "episode_start_ms"
+            ]
+            == 1_014_000
+        )
+
+    finally:
+        connection.close()

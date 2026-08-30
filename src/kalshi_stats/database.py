@@ -314,16 +314,40 @@ CREATE TABLE IF NOT EXISTS prospective_opportunities (
     gross_profit_per_contract REAL,
     settlement_result TEXT,
 
+    episode_number INTEGER NOT NULL DEFAULT 1,
+    episode_start_ms INTEGER NOT NULL DEFAULT 0,
+    episode_end_ms INTEGER,
+
     UNIQUE (
         strategy_id,
         market_ticker,
-        side
+        side,
+        episode_number
     )
 );
 
 CREATE INDEX IF NOT EXISTS idx_prospective_opportunities_time
 ON prospective_opportunities (
     detected_at_ms
+);
+
+
+CREATE TABLE IF NOT EXISTS prospective_episode_state (
+    strategy_id TEXT NOT NULL,
+    market_ticker TEXT NOT NULL,
+    side TEXT NOT NULL,
+
+    episode_number INTEGER NOT NULL DEFAULT 0,
+
+    in_setup INTEGER NOT NULL DEFAULT 0,
+    outside_since_ms INTEGER,
+    last_seen_ms INTEGER NOT NULL,
+
+    PRIMARY KEY (
+        strategy_id,
+        market_ticker,
+        side
+    )
 );
 
 
@@ -581,6 +605,266 @@ ON market_feature_snapshots (market_ticker, ts);
 """
 
 
+
+def _migrate_prospective_opportunity_episodes(
+    connection: sqlite3.Connection,
+) -> None:
+    """
+    Upgrade the original one-opportunity-per-market/side
+    table to episode-aware storage without losing rows.
+    """
+
+    columns = {
+        row["name"]
+        for row in connection.execute(
+            """
+            PRAGMA table_info(
+                prospective_opportunities
+            )
+            """
+        ).fetchall()
+    }
+
+    if not columns:
+        return
+
+    if "episode_number" in columns:
+        return
+
+    try:
+        connection.execute(
+            "BEGIN IMMEDIATE"
+        )
+
+        connection.execute(
+            """
+            ALTER TABLE
+                prospective_opportunities
+            RENAME TO
+                prospective_opportunities_legacy
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE TABLE prospective_opportunities (
+                opportunity_id INTEGER
+                    PRIMARY KEY AUTOINCREMENT,
+
+                strategy_id TEXT NOT NULL,
+                market_ticker TEXT NOT NULL,
+                side TEXT NOT NULL,
+
+                detected_at_ms INTEGER NOT NULL,
+                market_feature_ts INTEGER NOT NULL,
+
+                entry_bid REAL NOT NULL,
+                entry_ask REAL NOT NULL,
+                seconds_remaining REAL NOT NULL,
+
+                threshold REAL NOT NULL,
+                spot REAL NOT NULL,
+
+                side_threshold_distance_bps REAL,
+
+                return_60s_aligned REAL,
+                return_300s_aligned REAL,
+
+                vwap_distance_300s_bps_aligned REAL,
+                realized_vol_60s_bps REAL,
+
+                trade_imbalance_60s_aligned REAL,
+                trade_imbalance_300s_aligned REAL,
+                book_imbalance_top10_aligned REAL,
+
+                btc_spread_bps REAL,
+
+                brti_ts INTEGER,
+                brti_age_ms INTEGER,
+
+                brti_value REAL,
+                brti_avg_60s_value REAL,
+                brti_final_60s_avg_15m REAL,
+
+                brti_side_distance_dollars REAL,
+
+                label_status TEXT NOT NULL
+                    DEFAULT 'PENDING',
+
+                tp_hit INTEGER,
+                sl_hit INTEGER,
+                first_hit TEXT,
+
+                exit_ts_ms INTEGER,
+                exit_bid REAL,
+
+                gross_profit_per_contract REAL,
+                settlement_result TEXT,
+
+                episode_number INTEGER NOT NULL
+                    DEFAULT 1,
+
+                episode_start_ms INTEGER NOT NULL
+                    DEFAULT 0,
+
+                episode_end_ms INTEGER,
+
+                UNIQUE (
+                    strategy_id,
+                    market_ticker,
+                    side,
+                    episode_number
+                )
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            INSERT INTO prospective_opportunities (
+                opportunity_id,
+
+                strategy_id,
+                market_ticker,
+                side,
+
+                detected_at_ms,
+                market_feature_ts,
+
+                entry_bid,
+                entry_ask,
+                seconds_remaining,
+
+                threshold,
+                spot,
+
+                side_threshold_distance_bps,
+
+                return_60s_aligned,
+                return_300s_aligned,
+
+                vwap_distance_300s_bps_aligned,
+                realized_vol_60s_bps,
+
+                trade_imbalance_60s_aligned,
+                trade_imbalance_300s_aligned,
+                book_imbalance_top10_aligned,
+
+                btc_spread_bps,
+
+                brti_ts,
+                brti_age_ms,
+
+                brti_value,
+                brti_avg_60s_value,
+                brti_final_60s_avg_15m,
+
+                brti_side_distance_dollars,
+
+                label_status,
+
+                tp_hit,
+                sl_hit,
+                first_hit,
+
+                exit_ts_ms,
+                exit_bid,
+
+                gross_profit_per_contract,
+                settlement_result,
+
+                episode_number,
+                episode_start_ms,
+                episode_end_ms
+            )
+
+            SELECT
+                opportunity_id,
+
+                strategy_id,
+                market_ticker,
+                side,
+
+                detected_at_ms,
+                market_feature_ts,
+
+                entry_bid,
+                entry_ask,
+                seconds_remaining,
+
+                threshold,
+                spot,
+
+                side_threshold_distance_bps,
+
+                return_60s_aligned,
+                return_300s_aligned,
+
+                vwap_distance_300s_bps_aligned,
+                realized_vol_60s_bps,
+
+                trade_imbalance_60s_aligned,
+                trade_imbalance_300s_aligned,
+                book_imbalance_top10_aligned,
+
+                btc_spread_bps,
+
+                brti_ts,
+                brti_age_ms,
+
+                brti_value,
+                brti_avg_60s_value,
+                brti_final_60s_avg_15m,
+
+                brti_side_distance_dollars,
+
+                label_status,
+
+                tp_hit,
+                sl_hit,
+                first_hit,
+
+                exit_ts_ms,
+                exit_bid,
+
+                gross_profit_per_contract,
+                settlement_result,
+
+                1,
+                detected_at_ms,
+                NULL
+
+            FROM
+                prospective_opportunities_legacy
+            """
+        )
+
+        connection.execute(
+            """
+            DROP TABLE
+                prospective_opportunities_legacy
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX
+            idx_prospective_opportunities_time
+
+            ON prospective_opportunities (
+                detected_at_ms
+            )
+            """
+        )
+
+        connection.commit()
+
+    except Exception:
+        connection.rollback()
+        raise
+
+
+
 def connect(db_path: str | Path) -> sqlite3.Connection:
     path = Path(db_path)
     if path != Path(":memory:"):
@@ -613,4 +897,9 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
 
 def init_db(connection: sqlite3.Connection) -> None:
     connection.executescript(SCHEMA)
+
+    _migrate_prospective_opportunity_episodes(
+        connection
+    )
+
     connection.commit()

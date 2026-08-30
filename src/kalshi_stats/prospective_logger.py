@@ -24,6 +24,11 @@ TIME_HIGH = 599
 MAX_FEATURE_AGE_MS = 5000
 MAX_BRTI_AGE_MS = 5000
 
+# A brief quote flicker out of the band is not a
+# genuinely new setup. Require a sustained exit before
+# a re-entry becomes a new prospective episode.
+EPISODE_REENTRY_GAP_MS = 10_000
+
 
 def iso_to_ms(value):
     if not value:
@@ -419,6 +424,390 @@ def feature_values(
     return result
 
 
+def _episode_state(
+    connection,
+    *,
+    ticker,
+    side,
+):
+    return connection.execute(
+        """
+        SELECT *
+        FROM prospective_episode_state
+
+        WHERE strategy_id = ?
+          AND market_ticker = ?
+          AND side = ?
+        """,
+        (
+            STRATEGY_ID,
+            ticker,
+            side,
+        ),
+    ).fetchone()
+
+
+def _max_episode_number(
+    connection,
+    *,
+    ticker,
+    side,
+):
+    row = connection.execute(
+        """
+        SELECT
+            MAX(episode_number)
+                AS episode_number
+
+        FROM prospective_opportunities
+
+        WHERE strategy_id = ?
+          AND market_ticker = ?
+          AND side = ?
+        """,
+        (
+            STRATEGY_ID,
+            ticker,
+            side,
+        ),
+    ).fetchone()
+
+    if (
+        row is None
+        or row["episode_number"]
+        is None
+    ):
+        return 0
+
+    return int(
+        row["episode_number"]
+    )
+
+
+def _save_episode_state(
+    connection,
+    *,
+    ticker,
+    side,
+    episode_number,
+    in_setup,
+    outside_since_ms,
+    last_seen_ms,
+):
+    connection.execute(
+        """
+        INSERT INTO prospective_episode_state (
+            strategy_id,
+            market_ticker,
+            side,
+
+            episode_number,
+            in_setup,
+            outside_since_ms,
+            last_seen_ms
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+
+        ON CONFLICT (
+            strategy_id,
+            market_ticker,
+            side
+        )
+        DO UPDATE SET
+            episode_number =
+                excluded.episode_number,
+
+            in_setup =
+                excluded.in_setup,
+
+            outside_since_ms =
+                excluded.outside_since_ms,
+
+            last_seen_ms =
+                excluded.last_seen_ms
+        """,
+        (
+            STRATEGY_ID,
+            ticker,
+            side,
+
+            int(
+                episode_number
+            ),
+
+            int(
+                bool(
+                    in_setup
+                )
+            ),
+
+            (
+                None
+                if outside_since_ms
+                is None
+                else int(
+                    outside_since_ms
+                )
+            ),
+
+            int(
+                last_seen_ms
+            ),
+        ),
+    )
+
+
+def _close_episode(
+    connection,
+    *,
+    ticker,
+    side,
+    episode_number,
+    end_ms,
+):
+    if episode_number <= 0:
+        return
+
+    connection.execute(
+        """
+        UPDATE prospective_opportunities
+
+        SET episode_end_ms = ?
+
+        WHERE strategy_id = ?
+          AND market_ticker = ?
+          AND side = ?
+          AND episode_number = ?
+          AND episode_end_ms IS NULL
+        """,
+        (
+            int(
+                end_ms
+            ),
+            STRATEGY_ID,
+            ticker,
+            side,
+            int(
+                episode_number
+            ),
+        ),
+    )
+
+
+def _insert_opportunity_episode(
+    connection,
+    *,
+    feature,
+    brti,
+    side,
+    now_ms,
+    episode_number,
+):
+    bid, ask = side_prices(
+        feature,
+        side,
+    )
+
+    values = feature_values(
+        feature=feature,
+        brti=brti,
+        side=side,
+    )
+
+    feature_ts = int(
+        feature["ts"]
+    )
+
+    cursor = connection.execute(
+        """
+        INSERT OR IGNORE INTO
+        prospective_opportunities (
+            strategy_id,
+            market_ticker,
+            side,
+
+            detected_at_ms,
+            market_feature_ts,
+
+            entry_bid,
+            entry_ask,
+            seconds_remaining,
+
+            threshold,
+            spot,
+
+            side_threshold_distance_bps,
+
+            return_60s_aligned,
+            return_300s_aligned,
+
+            vwap_distance_300s_bps_aligned,
+            realized_vol_60s_bps,
+
+            trade_imbalance_60s_aligned,
+            trade_imbalance_300s_aligned,
+            book_imbalance_top10_aligned,
+
+            btc_spread_bps,
+
+            brti_ts,
+            brti_age_ms,
+
+            brti_value,
+            brti_avg_60s_value,
+            brti_final_60s_avg_15m,
+
+            brti_side_distance_dollars,
+
+            episode_number,
+            episode_start_ms
+        )
+        VALUES (
+            ?, ?, ?,
+
+            ?, ?,
+
+            ?, ?, ?,
+
+            ?, ?,
+
+            ?,
+
+            ?, ?,
+
+            ?, ?,
+
+            ?, ?, ?,
+
+            ?,
+
+            ?, ?,
+
+            ?, ?, ?,
+
+            ?,
+
+            ?, ?
+        )
+        """,
+        (
+            STRATEGY_ID,
+            feature[
+                "market_ticker"
+            ],
+            side,
+
+            int(
+                now_ms
+            ),
+
+            feature_ts,
+
+            bid,
+            ask,
+
+            float(
+                feature[
+                    "seconds_remaining"
+                ]
+            ),
+
+            float(
+                feature[
+                    "threshold"
+                ]
+            ),
+
+            float(
+                feature[
+                    "spot"
+                ]
+            ),
+
+            values[
+                "side_threshold_distance_bps"
+            ],
+
+            values[
+                "return_60s_aligned"
+            ],
+
+            values[
+                "return_300s_aligned"
+            ],
+
+            values[
+                "vwap_distance_300s_bps_aligned"
+            ],
+
+            values[
+                "realized_vol_60s_bps"
+            ],
+
+            values[
+                "trade_imbalance_60s_aligned"
+            ],
+
+            values[
+                "trade_imbalance_300s_aligned"
+            ],
+
+            values[
+                "book_imbalance_top10_aligned"
+            ],
+
+            values[
+                "btc_spread_bps"
+            ],
+
+            values[
+                "brti_ts"
+            ],
+
+            values[
+                "brti_age_ms"
+            ],
+
+            values[
+                "brti_value"
+            ],
+
+            values[
+                "brti_avg_60s_value"
+            ],
+
+            values[
+                "brti_final_60s_avg_15m"
+            ],
+
+            values[
+                "brti_side_distance_dollars"
+            ],
+
+            int(
+                episode_number
+            ),
+
+            feature_ts,
+        ),
+    )
+
+    if cursor.rowcount:
+        print(
+            "OPPORTUNITY | "
+            f"{feature['market_ticker']} | "
+            f"{side.upper()} | "
+            f"episode={episode_number} | "
+            f"ask={ask * 100:.1f}c | "
+            f"left="
+            f"{feature['seconds_remaining']:.0f}s"
+        )
+
+        return 1
+
+    return 0
+
+
 def record_opportunities(
     connection,
     *,
@@ -432,193 +821,250 @@ def record_opportunities(
     if feature is None:
         return 0
 
-    sides = qualifying_sides(
-        feature
+    ticker = str(
+        feature[
+            "market_ticker"
+        ]
     )
 
-    if not sides:
-        return 0
+    feature_ts = int(
+        feature["ts"]
+    )
 
     brti = brti_at(
         connection,
-        target_ms=int(
-            feature["ts"]
-        ),
+        target_ms=feature_ts,
     )
 
     inserted = 0
 
-    for side in sides:
-        bid, ask = side_prices(
+    for side in (
+        "yes",
+        "no",
+    ):
+        _, ask = side_prices(
             feature,
             side,
         )
 
-        values = feature_values(
-            feature=feature,
-            brti=brti,
-            side=side,
-        )
-
-        cursor = connection.execute(
-            """
-            INSERT OR IGNORE INTO
-            prospective_opportunities (
-                strategy_id,
-                market_ticker,
-                side,
-
-                detected_at_ms,
-                market_feature_ts,
-
-                entry_bid,
-                entry_ask,
-                seconds_remaining,
-
-                threshold,
-                spot,
-
-                side_threshold_distance_bps,
-
-                return_60s_aligned,
-                return_300s_aligned,
-
-                vwap_distance_300s_bps_aligned,
-                realized_vol_60s_bps,
-
-                trade_imbalance_60s_aligned,
-                trade_imbalance_300s_aligned,
-                book_imbalance_top10_aligned,
-
-                btc_spread_bps,
-
-                brti_ts,
-                brti_age_ms,
-                brti_value,
-                brti_avg_60s_value,
-                brti_final_60s_avg_15m,
-                brti_side_distance_dollars
-            )
-            VALUES (
-                ?, ?, ?,
-                ?, ?,
-                ?, ?, ?,
-                ?, ?,
-                ?,
-                ?, ?,
-                ?, ?,
-                ?, ?, ?,
-                ?,
-                ?, ?, ?, ?, ?, ?
-            )
-            """,
-            (
-                STRATEGY_ID,
+        is_qualified = qualifies(
+            ask=ask,
+            seconds_remaining=(
                 feature[
-                    "market_ticker"
-                ],
-                side,
-
-                int(now_ms),
-                int(
-                    feature["ts"]
-                ),
-
-                bid,
-                ask,
-                float(
-                    feature[
-                        "seconds_remaining"
-                    ]
-                ),
-
-                float(
-                    feature[
-                        "threshold"
-                    ]
-                ),
-
-                float(
-                    feature[
-                        "spot"
-                    ]
-                ),
-
-                values[
-                    "side_threshold_distance_bps"
-                ],
-
-                values[
-                    "return_60s_aligned"
-                ],
-
-                values[
-                    "return_300s_aligned"
-                ],
-
-                values[
-                    "vwap_distance_300s_bps_aligned"
-                ],
-
-                values[
-                    "realized_vol_60s_bps"
-                ],
-
-                values[
-                    "trade_imbalance_60s_aligned"
-                ],
-
-                values[
-                    "trade_imbalance_300s_aligned"
-                ],
-
-                values[
-                    "book_imbalance_top10_aligned"
-                ],
-
-                values[
-                    "btc_spread_bps"
-                ],
-
-                values[
-                    "brti_ts"
-                ],
-
-                values[
-                    "brti_age_ms"
-                ],
-
-                values[
-                    "brti_value"
-                ],
-
-                values[
-                    "brti_avg_60s_value"
-                ],
-
-                values[
-                    "brti_final_60s_avg_15m"
-                ],
-
-                values[
-                    "brti_side_distance_dollars"
-                ],
+                    "seconds_remaining"
+                ]
             ),
         )
 
-        if cursor.rowcount:
-            inserted += 1
+        state = _episode_state(
+            connection,
+            ticker=ticker,
+            side=side,
+        )
 
-            print(
-                "OPPORTUNITY | "
-                f"{feature['market_ticker']} | "
-                f"{side.upper()} "
-                f"ask={ask * 100:.1f}c | "
-                f"left="
-                f"{feature['seconds_remaining']:.0f}s"
+        if state is None:
+            episode_number = (
+                _max_episode_number(
+                    connection,
+                    ticker=ticker,
+                    side=side,
+                )
             )
 
+            if is_qualified:
+                # Existing migrated episode: resume it.
+                if episode_number == 0:
+                    episode_number = 1
+
+                    inserted += (
+                        _insert_opportunity_episode(
+                            connection,
+                            feature=feature,
+                            brti=brti,
+                            side=side,
+                            now_ms=now_ms,
+                            episode_number=(
+                                episode_number
+                            ),
+                        )
+                    )
+
+                _save_episode_state(
+                    connection,
+                    ticker=ticker,
+                    side=side,
+                    episode_number=(
+                        episode_number
+                    ),
+                    in_setup=True,
+                    outside_since_ms=None,
+                    last_seen_ms=feature_ts,
+                )
+
+            else:
+                _save_episode_state(
+                    connection,
+                    ticker=ticker,
+                    side=side,
+                    episode_number=(
+                        episode_number
+                    ),
+                    in_setup=False,
+                    outside_since_ms=(
+                        feature_ts
+                    ),
+                    last_seen_ms=feature_ts,
+                )
+
+            continue
+
+        episode_number = int(
+            state[
+                "episode_number"
+            ]
+        )
+
+        was_in_setup = bool(
+            state[
+                "in_setup"
+            ]
+        )
+
+        outside_since = (
+            state[
+                "outside_since_ms"
+            ]
+        )
+
+        if is_qualified:
+            if was_in_setup:
+                _save_episode_state(
+                    connection,
+                    ticker=ticker,
+                    side=side,
+                    episode_number=(
+                        episode_number
+                    ),
+                    in_setup=True,
+                    outside_since_ms=None,
+                    last_seen_ms=feature_ts,
+                )
+
+                continue
+
+            gap_ms = (
+                None
+                if outside_since
+                is None
+                else (
+                    feature_ts
+                    - int(
+                        outside_since
+                    )
+                )
+            )
+
+            if (
+                gap_ms is not None
+                and gap_ms
+                >= EPISODE_REENTRY_GAP_MS
+            ):
+                _close_episode(
+                    connection,
+                    ticker=ticker,
+                    side=side,
+                    episode_number=(
+                        episode_number
+                    ),
+                    end_ms=int(
+                        outside_since
+                    ),
+                )
+
+                episode_number += 1
+
+                inserted += (
+                    _insert_opportunity_episode(
+                        connection,
+                        feature=feature,
+                        brti=brti,
+                        side=side,
+                        now_ms=now_ms,
+                        episode_number=(
+                            episode_number
+                        ),
+                    )
+                )
+
+            # A short excursion outside the range belongs
+            # to the same episode.
+            _save_episode_state(
+                connection,
+                ticker=ticker,
+                side=side,
+                episode_number=(
+                    episode_number
+                ),
+                in_setup=True,
+                outside_since_ms=None,
+                last_seen_ms=feature_ts,
+            )
+
+            continue
+
+        # Not currently qualified.
+        if was_in_setup:
+            outside_since = (
+                feature_ts
+            )
+
+        elif outside_since is None:
+            outside_since = (
+                feature_ts
+            )
+
+        # Once the exit has persisted for the full gap,
+        # finalize the episode's end timestamp.
+        if (
+            episode_number > 0
+            and outside_since
+            is not None
+            and (
+                feature_ts
+                - int(
+                    outside_since
+                )
+            )
+            >= EPISODE_REENTRY_GAP_MS
+        ):
+            _close_episode(
+                connection,
+                ticker=ticker,
+                side=side,
+                episode_number=(
+                    episode_number
+                ),
+                end_ms=int(
+                    outside_since
+                ),
+            )
+
+        _save_episode_state(
+            connection,
+            ticker=ticker,
+            side=side,
+            episode_number=(
+                episode_number
+            ),
+            in_setup=False,
+            outside_since_ms=(
+                outside_since
+            ),
+            last_seen_ms=feature_ts,
+        )
+
     return inserted
+
 
 
 def unprocessed_fills(
