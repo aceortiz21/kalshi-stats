@@ -748,33 +748,12 @@ def finalize_market_data(
             "auto_finalize",
         )
 
-    trades = []
-
-    try:
-        trades = client.get_trades(
-            market_ticker,
-            historical=False,
-        )
-
-    except Exception:
-        # This fallback matters if a pending market remains in
-        # the queue long enough to cross Kalshi's archive cutoff.
-        try:
-            trades = client.get_trades(
-                market_ticker,
-                historical=True,
-            )
-        except Exception:
-            trades = []
-
+    # Do not bulk-download every public trade during live finalization.
+    # Settlement + official 1m candles are sufficient for the historical
+    # model, while our live WebSocket snapshots provide higher-resolution
+    # observations for newly collected markets. Raw public trades remain
+    # available through KalshiClient.get_trades() for selective research.
     trade_rows = 0
-
-    if trades:
-        trade_rows = upsert_trades(
-            connection,
-            market_ticker,
-            trades,
-        )
 
     total_candles = connection.execute(
         """
