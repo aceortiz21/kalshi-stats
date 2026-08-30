@@ -13,6 +13,7 @@ from .analytics import (
     build_live_scenario_board,
     build_probability_matrix,
     build_validated_setups,
+    build_validated_strategies,
     database_overview,
 )
 from .btc_data import backfill_binance_1s, sync_latest_coinbase_second
@@ -107,47 +108,104 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _render_dashboard(db: str, scenarios_path: str, output: str) -> None:
+
+def _build_historical_dashboard_cache(
+    connection,
+    scenarios_path: str,
+):
+    """Build the expensive historical dashboard data once."""
+
+    scenarios = load_scenarios(scenarios_path)
+
+    settled_markets = _settled_markets_with_data(connection)
+
+    series_map = _build_series_map(
+        connection,
+        settled_markets,
+    )
+
+    summaries, _ = analyze_scenarios(
+        connection,
+        scenarios,
+        settled_markets=settled_markets,
+        series_map=series_map,
+    )
+
+    matrix = build_probability_matrix(
+        connection,
+        settled_markets=settled_markets,
+        series_map=series_map,
+    )
+
+    validated_setups = build_validated_setups(
+        connection,
+        settled_markets=settled_markets,
+        series_map=series_map,
+    )
+
+    validated_strategies = build_validated_strategies(
+        connection,
+        settled_markets=settled_markets,
+        series_map=series_map,
+        discovery_fraction=0.80,
+        min_discovery_n=500,
+        min_holdout_n=100,
+        ambiguity_mode="conservative",
+    )
+
+    return {
+        "scenarios": scenarios,
+        "summaries": summaries,
+        "matrix": matrix,
+        "validated_setups": validated_setups,
+        "validated_strategies": validated_strategies,
+    }
+
+
+
+def _render_dashboard(
+    db: str,
+    scenarios_path: str,
+    output: str,
+) -> None:
     connection = connect(db)
+
     try:
         init_db(connection)
-        scenarios = load_scenarios(scenarios_path)
-        settled_markets = _settled_markets_with_data(connection)
-        series_map = _build_series_map(connection, settled_markets)
-        summaries, _ = analyze_scenarios(connection, scenarios, settled_markets=settled_markets, series_map=series_map)
-        matrix = build_probability_matrix(connection, settled_markets=settled_markets, series_map=series_map)
-        validated_setups = build_validated_setups(
-            connection,
-            settled_markets=settled_markets,
-            series_map=series_map,
-        )
-        from .analytics import build_validated_strategies
 
-        validated_strategies = build_validated_strategies(
+        cache = _build_historical_dashboard_cache(
             connection,
-            settled_markets=settled_markets,
-            series_map=series_map,
-            discovery_fraction=0.80,
-            min_discovery_n=500,
-            min_holdout_n=100,
-            ambiguity_mode="conservative",
+            scenarios_path,
         )
-        live_matches = build_live_scenario_board(connection, scenarios, summaries)
 
-        active_views = build_active_market_side_views(connection, scenarios, matrix)
+        live_matches = build_live_scenario_board(
+            connection,
+            cache["scenarios"],
+            cache["summaries"],
+        )
+
+        active_views = build_active_market_side_views(
+            connection,
+            cache["scenarios"],
+            cache["matrix"],
+        )
+
         overview = database_overview(connection)
+
         render_html_report(
             output,
             overview,
-            summaries,
-            matrix,
+            cache["summaries"],
+            cache["matrix"],
             live_matches,
             active_views,
-            validated_setups,
-            validated_strategies,
+            cache["validated_setups"],
+            cache["validated_strategies"],
         )
+
     finally:
         connection.close()
+
 
 
 def main() -> None:
@@ -324,17 +382,82 @@ def main() -> None:
         return
 
     if args.command == "monitor":
-        while True:
-            connection = connect(args.db)
-            try:
-                init_db(connection)
-                sync_live(connection, client, args.series)
+        connection = connect(args.db)
+
+        try:
+            init_db(connection)
+
+            print("Building historical analytics cache...")
+            history_started = time.perf_counter()
+
+            cache = _build_historical_dashboard_cache(
+                connection,
+                args.scenarios,
+            )
+
+            history_elapsed = time.perf_counter() - history_started
+
+            print(
+                "Historical analytics cache ready "
+                f"in {history_elapsed:.2f}s"
+            )
+
+            print(
+                "Live monitor will now reuse the historical cache "
+                f"every {args.interval}s."
+            )
+
+            while True:
+                refresh_started = time.perf_counter()
+
+                counts = sync_live(
+                    connection,
+                    client,
+                    args.series,
+                )
+
                 sync_latest_coinbase_second(connection)
-            finally:
-                connection.close()
-            _render_dashboard(args.db, args.scenarios, args.output)
-            print(f"Updated live snapshots and refreshed {args.output}")
-            time.sleep(args.interval)
+
+                live_matches = build_live_scenario_board(
+                    connection,
+                    cache["scenarios"],
+                    cache["summaries"],
+                )
+
+                active_views = build_active_market_side_views(
+                    connection,
+                    cache["scenarios"],
+                    cache["matrix"],
+                )
+
+                overview = database_overview(connection)
+
+                render_html_report(
+                    args.output,
+                    overview,
+                    cache["summaries"],
+                    cache["matrix"],
+                    live_matches,
+                    active_views,
+                    cache["validated_setups"],
+                    cache["validated_strategies"],
+                )
+
+                refresh_elapsed = (
+                    time.perf_counter() - refresh_started
+                )
+
+                print(
+                    f"Live refresh: "
+                    f"{counts['markets']} market(s), "
+                    f"{counts['snapshots']} snapshot(s), "
+                    f"{refresh_elapsed:.2f}s"
+                )
+
+                time.sleep(args.interval)
+
+        finally:
+            connection.close()
 
     if args.command == "serve":
         server = ThreadingHTTPServer((args.host, args.port), SimpleHTTPRequestHandler)
