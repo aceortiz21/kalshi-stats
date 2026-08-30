@@ -9,6 +9,11 @@ from .dashboard_cache import (
     count_model_pending_markets,
     load_cached_historical_cache,
 )
+from .database import connect
+from .health import (
+    build_data_health,
+    health_signature,
+)
 from .kalshi_ws import KalshiTickerWebSocket
 from .live import (
     build_live_side_views,
@@ -96,6 +101,21 @@ async def run_websocket_live_loop(
 
     model_process = None
     last_model_check = 0.0
+
+    # --------------------------------------------------------
+    # Runtime health + background finalization
+    # --------------------------------------------------------
+
+    health_state: dict[str, object] = {}
+    last_health_check = 0.0
+    last_health_log = 0.0
+
+    current_market_ticker: str | None = None
+    ws_connected = False
+    last_event_latency_ms: int | None = None
+
+    finalization_task = None
+    finalization_ticker: str | None = None
 
     async def service_model_rebuild() -> None:
         nonlocal model_process
@@ -230,86 +250,269 @@ async def run_websocket_live_loop(
         )
 
     # --------------------------------------------------------
-    # Finished-market ingestion
+    # Health + finished-market ingestion
     # --------------------------------------------------------
+
+    def refresh_health(
+        *,
+        force: bool = False,
+    ) -> None:
+        nonlocal health_state
+        nonlocal last_health_check
+        nonlocal last_health_log
+
+        now = time.monotonic()
+
+        if (
+            not force
+            and now - last_health_check < 5.0
+        ):
+            return
+
+        last_health_check = now
+
+        try:
+            model_pending = (
+                count_model_pending_markets(
+                    connection,
+                    cache,
+                )
+            )
+
+            model_meta = cache.get(
+                "_model_meta",
+                {},
+            )
+
+            model_running = bool(
+                model_process is not None
+                and model_process.returncode is None
+            )
+
+            health_state = build_data_health(
+                connection,
+                series_ticker=series_ticker,
+                model_meta=model_meta,
+                model_pending=model_pending,
+                auto_rebuild_after=auto_rebuild_after,
+                pending_finalizations=len(
+                    pending_finalizations
+                ),
+                current_market_ticker=(
+                    current_market_ticker
+                ),
+                ws_connected=ws_connected,
+                last_event_latency_ms=(
+                    last_event_latency_ms
+                ),
+                model_rebuild_running=(
+                    model_running
+                ),
+            )
+
+            if (
+                now - last_health_log >= 30.0
+            ):
+                print(
+                    "HEALTH | "
+                    f"{health_state.get('status')} | "
+                    f"WS="
+                    f"{'up' if ws_connected else 'down'} | "
+                    f"24h markets="
+                    f"{health_state.get('recent_markets')}/"
+                    f"{health_state.get('expected_recent_markets')} | "
+                    f"candles="
+                    f"{health_state.get('complete_candles')}/"
+                    f"{health_state.get('recent_settled')} | "
+                    f"high-res="
+                    f"{health_state.get('recent_quote_markets')} | "
+                    f"pending="
+                    f"{health_state.get('pending_finalizations')} | "
+                    f"model=v"
+                    f"{health_state.get('model_number')} "
+                    f"+{health_state.get('model_pending')}"
+                )
+
+                last_health_log = now
+
+        except Exception as exc:
+            health_state = {
+                "status": "WARNING",
+                "issues": [
+                    "health check failed: "
+                    f"{type(exc).__name__}"
+                ],
+                "ws_connected": ws_connected,
+                "pending_finalizations": len(
+                    pending_finalizations
+                ),
+                "model_number": (
+                    cache
+                    .get("_model_meta", {})
+                    .get("model_number", 0)
+                ),
+                "model_market_count": (
+                    cache
+                    .get("_model_meta", {})
+                    .get("market_count", 0)
+                ),
+                "strong_strategies": (
+                    cache
+                    .get("_model_meta", {})
+                    .get("strong_strategies", 0)
+                ),
+                "model_pending": 0,
+                "auto_rebuild_after": (
+                    auto_rebuild_after
+                ),
+            }
+
+
+    def finalize_in_worker(
+        ticker: str,
+    ) -> dict[str, object]:
+        """
+        Run settlement/candle ingestion away from the WebSocket
+        event loop with its own SQLite connection.
+        """
+
+        if not db_path:
+            raise RuntimeError(
+                "db_path is required for "
+                "background finalization"
+            )
+
+        worker_connection = connect(
+            db_path
+        )
+
+        try:
+            return finalize_market_data(
+                worker_connection,
+                client,
+                series_ticker=series_ticker,
+                market_ticker=ticker,
+            )
+
+        finally:
+            worker_connection.close()
+
 
     async def service_pending_finalizations() -> None:
         nonlocal last_finalize_check
+        nonlocal finalization_task
+        nonlocal finalization_ticker
+
+        now = time.monotonic()
+
+        # Harvest a completed background job.
+        if finalization_task is not None:
+            if not finalization_task.done():
+                return
+
+            ticker = finalization_ticker
+            task = finalization_task
+
+            finalization_task = None
+            finalization_ticker = None
+
+            try:
+                finalized = task.result()
+
+                if (
+                    finalized["settled"]
+                    and finalized["complete"]
+                ):
+                    print(
+                        "INGESTED | "
+                        f"{ticker} | "
+                        f"result="
+                        f"{finalized['result']} | "
+                        f"candles="
+                        f"{finalized['candles']} | "
+                        f"trades="
+                        f"{finalized['trades']} | "
+                        f"live snapshots="
+                        f"{finalized['snapshots']}"
+                    )
+
+                    if ticker is not None:
+                        pending_finalizations.pop(
+                            ticker,
+                            None,
+                        )
+
+                else:
+                    if finalized["settled"]:
+                        print(
+                            "SETTLED, WAITING FOR "
+                            "COMPLETE CANDLES | "
+                            f"{ticker} | "
+                            f"candles="
+                            f"{finalized['candles']}"
+                        )
+
+                    if (
+                        ticker is not None
+                        and ticker
+                        in pending_finalizations
+                    ):
+                        pending_finalizations[ticker] = (
+                            pending_finalizations.pop(
+                                ticker
+                            )
+                        )
+
+            except Exception as exc:
+                print(
+                    "FINALIZE RETRY | "
+                    f"{ticker} | "
+                    f"{type(exc).__name__}: "
+                    f"{exc}"
+                )
+
+                if (
+                    ticker is not None
+                    and ticker
+                    in pending_finalizations
+                ):
+                    pending_finalizations[ticker] = (
+                        pending_finalizations.pop(
+                            ticker
+                        )
+                    )
+
+            last_finalize_check = now
+
+            refresh_health(
+                force=True
+            )
+
+        if finalization_task is not None:
+            return
 
         if not pending_finalizations:
             return
 
         now = time.monotonic()
 
-        if now - last_finalize_check < 5.0:
+        if (
+            now - last_finalize_check < 5.0
+        ):
             return
 
         ticker = next(
             iter(pending_finalizations)
         )
 
-        try:
-            finalized = finalize_market_data(
-                connection,
-                client,
-                series_ticker=series_ticker,
-                market_ticker=ticker,
+        finalization_ticker = ticker
+
+        finalization_task = asyncio.create_task(
+            asyncio.to_thread(
+                finalize_in_worker,
+                ticker,
             )
-
-            if (
-                finalized["settled"]
-                and finalized["complete"]
-            ):
-                print(
-                    "INGESTED | "
-                    f"{ticker} | "
-                    f"result="
-                    f"{finalized['result']} | "
-                    f"candles="
-                    f"{finalized['candles']} | "
-                    f"trades="
-                    f"{finalized['trades']} | "
-                    f"live snapshots="
-                    f"{finalized['snapshots']}"
-                )
-
-                del pending_finalizations[
-                    ticker
-                ]
-
-            else:
-                if finalized["settled"]:
-                    print(
-                        "SETTLED, WAITING FOR "
-                        "COMPLETE CANDLES | "
-                        f"{ticker} | "
-                        f"candles="
-                        f"{finalized['candles']}"
-                    )
-
-                # Rotate so one slow market cannot prevent
-                # other pending markets from being ingested.
-                pending_finalizations[ticker] = (
-                    pending_finalizations.pop(
-                        ticker
-                    )
-                )
-
-        except Exception as exc:
-            print(
-                "FINALIZE RETRY | "
-                f"{ticker} | "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
-
-            pending_finalizations[ticker] = (
-                pending_finalizations.pop(
-                    ticker
-                )
-            )
-
-        last_finalize_check = now
+        )
 
     # --------------------------------------------------------
     # Main always-on loop
@@ -319,6 +522,7 @@ async def run_websocket_live_loop(
         while True:
             await service_pending_finalizations()
             await service_model_rebuild()
+            refresh_health()
 
             try:
                 markets = client.get_active_markets(
@@ -340,10 +544,18 @@ async def run_websocket_live_loop(
             )
 
             if market is None:
+                current_market_ticker = None
+                ws_connected = False
+
+                refresh_health(
+                    force=True
+                )
+
                 render_live_market_fragment(
                     live_fragment_path,
                     [],
                     cache["validated_strategies"],
+                    health=health_state,
                 )
 
                 if previous_market is not None:
@@ -360,6 +572,8 @@ async def run_websocket_live_loop(
             ticker = str(
                 market["ticker"]
             )
+
+            current_market_ticker = ticker
 
             if ticker != previous_market:
                 try:
@@ -409,12 +623,17 @@ async def run_websocket_live_loop(
                 quote_ts_ms=quote_ts_ms,
             )
 
+            refresh_health(
+                force=True
+            )
+
             render_live_market_fragment(
                 live_fragment_path,
                 views,
                 cache[
                     "validated_strategies"
                 ],
+                health=health_state,
             )
 
             close_ts = (
@@ -440,6 +659,12 @@ async def run_websocket_live_loop(
                         ticker,
                     )
 
+                    ws_connected = True
+
+                    refresh_health(
+                        force=True
+                    )
+
                     reconnect_delay = 0.5
 
                     last_signature = None
@@ -457,6 +682,8 @@ async def run_websocket_live_loop(
                         await (
                             service_model_rebuild()
                         )
+
+                        refresh_health()
 
                         ticker_update = None
 
@@ -490,6 +717,15 @@ async def run_websocket_live_loop(
 
                             quote_ts_ms = (
                                 ticker_update.ts_ms
+                            )
+
+                            last_event_latency_ms = max(
+                                0,
+                                int(
+                                    time.time()
+                                    * 1000
+                                    - quote_ts_ms
+                                ),
                             )
 
                             event_second = (
@@ -572,6 +808,9 @@ async def run_websocket_live_loop(
                                 4,
                             ),
                             model_number,
+                            health_signature(
+                                health_state
+                            ),
                             tuple(
                                 (
                                     view.side,
@@ -592,6 +831,7 @@ async def run_websocket_live_loop(
                                 cache[
                                     "validated_strategies"
                                 ],
+                                health=health_state,
                             )
 
                             last_signature = (
@@ -671,6 +911,24 @@ async def run_websocket_live_loop(
                     )
 
                 finally:
+                    ws_connected = False
+
+                    refresh_health(
+                        force=True
+                    )
+
+                    try:
+                        render_live_market_fragment(
+                            live_fragment_path,
+                            views,
+                            cache[
+                                "validated_strategies"
+                            ],
+                            health=health_state,
+                        )
+                    except Exception:
+                        pass
+
                     if websocket is not None:
                         try:
                             await websocket.close()
@@ -680,6 +938,13 @@ async def run_websocket_live_loop(
             pending_finalizations[
                 ticker
             ] = None
+
+            current_market_ticker = None
+            ws_connected = False
+
+            refresh_health(
+                force=True
+            )
 
             print(
                 "CLOSED | queued for ingestion:",
@@ -691,6 +956,20 @@ async def run_websocket_live_loop(
             await asyncio.sleep(0.05)
 
     finally:
+        if (
+            finalization_task is not None
+            and not finalization_task.done()
+        ):
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(
+                        finalization_task
+                    ),
+                    timeout=5,
+                )
+            except Exception:
+                pass
+
         if (
             model_process is not None
             and model_process.returncode

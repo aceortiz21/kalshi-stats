@@ -477,19 +477,259 @@ def render_live_decision_cards(
     """
 
 
+def _health_age(
+    seconds,
+) -> str:
+    if seconds is None:
+        return "-"
+
+    seconds = max(
+        0,
+        int(seconds),
+    )
+
+    if seconds < 60:
+        return f"{seconds}s"
+
+    minutes = seconds // 60
+
+    if minutes < 60:
+        return f"{minutes}m"
+
+    hours = minutes / 60
+    return f"{hours:.1f}h"
+
+
+def _render_health_strip(
+    health,
+) -> str:
+    if not health:
+        return ""
+
+    status = str(
+        health.get(
+            "status",
+            "UNKNOWN",
+        )
+    )
+
+    ws_text = (
+        "CONNECTED"
+        if health.get(
+            "ws_connected"
+        )
+        else "RECONNECTING"
+    )
+
+    latency = health.get(
+        "last_event_latency_ms"
+    )
+
+    latency_text = (
+        "-"
+        if latency is None
+        else f"{int(latency)}ms"
+    )
+
+    recent = int(
+        health.get(
+            "recent_markets",
+            0,
+        )
+        or 0
+    )
+
+    expected = int(
+        health.get(
+            "expected_recent_markets",
+            96,
+        )
+        or 96
+    )
+
+    settled = int(
+        health.get(
+            "recent_settled",
+            0,
+        )
+        or 0
+    )
+
+    complete = int(
+        health.get(
+            "complete_candles",
+            0,
+        )
+        or 0
+    )
+
+    quote_markets = int(
+        health.get(
+            "recent_quote_markets",
+            0,
+        )
+        or 0
+    )
+
+    pending = int(
+        health.get(
+            "pending_finalizations",
+            0,
+        )
+        or 0
+    )
+
+    model_number = int(
+        health.get(
+            "model_number",
+            0,
+        )
+        or 0
+    )
+
+    model_markets = int(
+        health.get(
+            "model_market_count",
+            0,
+        )
+        or 0
+    )
+
+    strong = int(
+        health.get(
+            "strong_strategies",
+            0,
+        )
+        or 0
+    )
+
+    model_pending = int(
+        health.get(
+            "model_pending",
+            0,
+        )
+        or 0
+    )
+
+    rebuild_after = int(
+        health.get(
+            "auto_rebuild_after",
+            0,
+        )
+        or 0
+    )
+
+    model_age = _health_age(
+        health.get(
+            "model_age_seconds"
+        )
+    )
+
+    rebuild_text = (
+        " · REBUILDING"
+        if health.get(
+            "model_rebuild_running"
+        )
+        else ""
+    )
+
+    issues = health.get(
+        "issues",
+        [],
+    )
+
+    issue_html = ""
+
+    if issues:
+        issue_text = " · ".join(
+            html.escape(
+                str(issue)
+            )
+            for issue in issues[:2]
+        )
+
+        issue_html = (
+            '<div style="margin-top:6px; '
+            'font-size:12px;">'
+            f'{issue_text}'
+            '</div>'
+        )
+
+    return f"""
+    <div style="
+        border:1px solid rgba(127,127,127,.35);
+        border-radius:10px;
+        padding:10px 12px;
+        margin:0 0 10px 0;
+        font-size:13px;
+        line-height:1.45;
+    ">
+      <div style="
+          display:flex;
+          gap:12px;
+          flex-wrap:wrap;
+          align-items:center;
+      ">
+        <strong>
+          DATA HEALTH: {html.escape(status)}
+        </strong>
+        <span>
+          WS {ws_text} · {latency_text}
+        </span>
+        <span>
+          24H MARKETS {recent}/{expected}
+        </span>
+        <span>
+          CANDLES {complete}/{settled}
+        </span>
+        <span>
+          HIGH-RES {quote_markets}
+        </span>
+        <span>
+          PENDING {pending}
+        </span>
+      </div>
+
+      <div style="
+          margin-top:5px;
+          font-size:12px;
+          opacity:.82;
+      ">
+        MODEL v{model_number}
+        · {model_markets:,} markets
+        · {strong} STRONG
+        · {model_pending}/{rebuild_after} new
+        · age {model_age}
+        {rebuild_text}
+      </div>
+
+      {issue_html}
+    </div>
+    """
+
+
 def render_live_market_fragment(
     output_path: str | Path,
     active_views,
     validated_strategies,
+    health=None,
 ) -> None:
     """Write only the lightweight live market UI fragment."""
 
     output = Path(output_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
+    output.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    rendered = render_live_decision_cards(
-        active_views,
-        validated_strategies,
+    rendered = (
+        _render_health_strip(
+            health
+        )
+        + render_live_decision_cards(
+            active_views,
+            validated_strategies,
+        )
     )
 
     temporary = output.with_name(
@@ -502,6 +742,8 @@ def render_live_market_fragment(
     )
 
     temporary.replace(output)
+
+
 
 
 

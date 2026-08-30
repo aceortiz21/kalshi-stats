@@ -523,22 +523,26 @@ def main() -> None:
                 "WebSocket pricing..."
             )
 
-            asyncio.run(
-                run_websocket_live_loop(
-                    connection=connection,
-                    client=client,
-                    cache=cache,
-                    output_path=args.output,
-                    series_ticker=args.series,
-                    db_path=args.db,
-                    scenarios_path=args.scenarios,
-                    cache_path=str(cache_path),
-                    auto_rebuild_after=max(
-                        0,
-                        int(args.auto_rebuild_after),
-                    ),
+            try:
+                asyncio.run(
+                    run_websocket_live_loop(
+                        connection=connection,
+                        client=client,
+                        cache=cache,
+                        output_path=args.output,
+                        series_ticker=args.series,
+                        db_path=args.db,
+                        scenarios_path=args.scenarios,
+                        cache_path=str(cache_path),
+                        auto_rebuild_after=max(
+                            0,
+                            int(args.auto_rebuild_after),
+                        ),
+                    )
                 )
-            )
+            except KeyboardInterrupt:
+                print("\\nKalshi monitor stopped.")
+                raise SystemExit(130)
 
         finally:
             connection.close()
