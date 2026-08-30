@@ -1,0 +1,126 @@
+[
+  {
+    "id": "early_20s_rebound",
+    "name": "Early 20s rebound",
+    "description": "A side trades in the 20s during the first five minutes and you buy that same side.",
+    "trigger_price_min": 0.20,
+    "trigger_price_max": 0.29,
+    "elapsed_seconds_max": 300,
+    "trade_side": "same",
+    "occurrence_mode": "first_per_market",
+    "targets": [0.30, 0.35, 0.40, 0.50]
+  },
+  {
+    "id": "teens_comeback",
+    "name": "Teens comeback",
+    "description": "A side trades in the teens and you buy that same side.",
+    "trigger_price_min": 0.10,
+    "trigger_price_max": 0.19,
+    "trade_side": "same",
+    "occurrence_mode": "first_per_market",
+    "targets": [0.20, 0.30, 0.40, 0.50]
+  },
+  {
+    "id": "single_digit_resurrection",
+    "name": "Single-digit resurrection",
+    "description": "A side trades below 10 cents and you buy that same side.",
+    "trigger_price_min": 0.00,
+    "trigger_price_max": 0.09,
+    "trade_side": "same",
+    "occurrence_mode": "first_per_market",
+    "targets": [0.10, 0.20, 0.30, 0.50]
+  },
+  {
+    "id": "price_recovery_30s",
+    "name": "30s recovery",
+    "description": "A side trades in the 30s and you study its rebound path from there.",
+    "trigger_price_min": 0.30,
+    "trigger_price_max": 0.39,
+    "trade_side": "same",
+    "occurrence_mode": "first_per_market",
+    "targets": [0.40, 0.50, 0.60, 0.70]
+  },
+  {
+    "id": "full_flip_from_10s",
+    "name": "Full flip from 10s",
+    "description": "A side trades at 10 cents or lower and you track whether it later becomes the favorite.",
+    "trigger_price_min": 0.00,
+    "trigger_price_max": 0.10,
+    "trade_side": "same",
+    "occurrence_mode": "first_per_market",
+    "targets": [0.20, 0.30, 0.40, 0.50, 0.60]
+  },
+  {
+    "id": "favorite_fade_80s",
+    "name": "Favorite fade from 80s",
+    "description": "A side trades at 80 to 90 cents in the first three minutes and you buy the opposite side.",
+    "trigger_price_min": 0.80,
+    "trigger_price_max": 0.90,
+    "elapsed_seconds_max": 180,
+    "trade_side": "opposite",
+    "occurrence_mode": "first_per_market",
+    "targets": [0.20, 0.30, 0.40, 0.50]
+  },
+  {
+    "id": "favorite_fade_70s",
+    "name": "Favorite fade from 70s",
+    "description": "A side trades at 70 to 79 cents and you buy the opposite side.",
+    "trigger_price_min": 0.70,
+    "trigger_price_max": 0.79,
+    "trade_side": "opposite",
+    "occurrence_mode": "first_per_market",
+    "targets": [0.30, 0.40, 0.50]
+  },
+  {
+    "id": "favorite_fade_90s",
+    "name": "Favorite fade from 90s",
+    "description": "A side trades at 90 cents or higher and you buy the opposite side.",
+    "trigger_price_min": 0.90,
+    "trigger_price_max": 1.00,
+    "trade_side": "opposite",
+    "occurrence_mode": "first_per_market",
+    "targets": [0.20, 0.30, 0.40]
+  },
+  {
+    "id": "full_flip_from_20s",
+    "name": "Full flip from 20s",
+    "description": "A side trades at 20 cents or lower and you buy that same side looking for a full flip.",
+    "trigger_price_min": 0.00,
+    "trigger_price_max": 0.20,
+    "trade_side": "same",
+    "occurrence_mode": "first_per_market",
+    "targets": [0.30, 0.40, 0.50, 0.60]
+  },
+  {
+    "id": "full_flip_from_30s",
+    "name": "Full flip from 30s",
+    "description": "A side trades at 30 cents or lower and you track whether it later clears 50 cents.",
+    "trigger_price_min": 0.00,
+    "trigger_price_max": 0.30,
+    "trade_side": "same",
+    "occurrence_mode": "first_per_market",
+    "targets": [0.40, 0.50, 0.60]
+  },
+  {
+    "id": "late_underdog_comeback",
+    "name": "Late underdog comeback",
+    "description": "A side trades at 20 cents or lower with three minutes or less remaining and you buy that side.",
+    "trigger_price_min": 0.00,
+    "trigger_price_max": 0.20,
+    "seconds_remaining_max": 180,
+    "trade_side": "same",
+    "occurrence_mode": "first_per_market",
+    "targets": [0.30, 0.40, 0.50]
+  },
+  {
+    "id": "ultra_late_single_digit",
+    "name": "Ultra-late single digits",
+    "description": "A side trades at 10 cents or lower with under one minute remaining.",
+    "trigger_price_min": 0.00,
+    "trigger_price_max": 0.10,
+    "seconds_remaining_max": 59,
+    "trade_side": "same",
+    "occurrence_mode": "first_per_market",
+    "targets": [0.20, 0.30, 0.40]
+  }
+]
