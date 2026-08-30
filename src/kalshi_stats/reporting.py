@@ -916,12 +916,702 @@ def _render_brti_strip(
     </section>
     """
 
+
+def _money(
+    value,
+    *,
+    signed=False,
+) -> str:
+    if value is None:
+        return "-"
+
+    number = float(value)
+
+    if signed:
+        return (
+            f"${number:+,.2f}"
+        )
+
+    return (
+        f"${number:,.2f}"
+    )
+
+
+def render_personal_performance(
+    personal,
+) -> str:
+    if not personal:
+        return ""
+
+    stats = personal["all"]
+    btc = personal["btc15m"]
+
+    win_rate = (
+        "-"
+        if stats[
+            "win_rate"
+        ] is None
+        else (
+            f"{stats['win_rate'] * 100:.1f}%"
+        )
+    )
+
+    profit_factor = (
+        "-"
+        if stats[
+            "profit_factor"
+        ] is None
+        else (
+            f"{stats['profit_factor']:.2f}"
+        )
+    )
+
+    avg_win = _money(
+        stats["avg_win"],
+        signed=True,
+    )
+
+    avg_loss = _money(
+        stats["avg_loss"],
+        signed=True,
+    )
+
+    rows = []
+
+    for item in personal[
+        "completed"
+    ]:
+        settled = str(
+            item.get(
+                "settled_time"
+            )
+            or "-"
+        )
+
+        if "T" in settled:
+            settled = (
+                settled
+                .replace(
+                    "T",
+                    " ",
+                )
+                .replace(
+                    "Z",
+                    "",
+                )
+            )
+
+        result = str(
+            item.get(
+                "market_result"
+            )
+            or "-"
+        ).upper()
+
+        rows.append(
+            """
+            <tr>
+              <td>{settled}</td>
+              <td>{ticker}</td>
+              <td>{result}</td>
+              <td><strong>{pnl}</strong></td>
+              <td>{fees}</td>
+              <td>{fills}</td>
+              <td>{cost}</td>
+              <td>{payout}</td>
+            </tr>
+            """.format(
+                settled=html.escape(
+                    settled
+                ),
+
+                ticker=html.escape(
+                    str(
+                        item[
+                            "ticker"
+                        ]
+                    )
+                ),
+
+                result=html.escape(
+                    result
+                ),
+
+                pnl=_money(
+                    item["pnl"],
+                    signed=True,
+                ),
+
+                fees=_money(
+                    item["fees"]
+                ),
+
+                fills=int(
+                    item["fills"]
+                ),
+
+                cost=_money(
+                    item["cost"]
+                ),
+
+                payout=_money(
+                    item["payout"]
+                ),
+            )
+        )
+
+    history_rows = (
+        "\n".join(rows)
+        if rows
+        else """
+        <tr>
+          <td colspan="8">
+            No settled personal trades yet.
+          </td>
+        </tr>
+        """
+    )
+
+    prospective = personal[
+        "prospective"
+    ]
+
+    fill_capture = personal[
+        "fill_capture"
+    ]
+
+    attribution = personal[
+        "attribution"
+    ]
+
+    qualified = attribution[
+        "qualified_traded"
+    ]
+
+    passed = attribution[
+        "pass_traded"
+    ]
+
+    no_data = attribution[
+        "no_system_data"
+    ]
+
+    def attribution_pnl(
+        group,
+    ):
+        if (
+            group[
+                "closed"
+            ]
+            == 0
+        ):
+            return "-"
+
+        return _money(
+            group["pnl"],
+            signed=True,
+        )
+
+    def attribution_avg(
+        group,
+    ):
+        value = group[
+            "avg_pnl"
+        ]
+
+        return (
+            "-"
+            if value is None
+            else _money(
+                value,
+                signed=True,
+            )
+        )
+
+    skipped_avg = attribution[
+        "skipped_avg_gross_profit"
+    ]
+
+    skipped_avg_text = (
+        "-"
+        if skipped_avg is None
+        else (
+            f"{skipped_avg * 100:+.2f}c"
+        )
+    )
+
+    return """
+    <section style="
+        margin-top:16px;
+        border:
+            1px solid rgba(127,127,127,.35);
+        border-radius:12px;
+        padding:14px;
+        width:100%;
+        box-sizing:border-box;
+    ">
+      <div style="
+          display:flex;
+          justify-content:space-between;
+          gap:16px;
+          align-items:flex-start;
+          flex-wrap:wrap;
+          margin-bottom:12px;
+      ">
+        <div>
+          <div style="
+              font-size:12px;
+              letter-spacing:.07em;
+              text-transform:uppercase;
+              opacity:.72;
+          ">
+            Your Kalshi performance
+          </div>
+
+          <h3 style="
+              margin:3px 0 0 0;
+          ">
+            Personal Trading Ledger
+          </h3>
+        </div>
+
+        <div style="
+            font-size:12px;
+            opacity:.75;
+            max-width:520px;
+        ">
+          P&amp;L is reconstructed from authenticated
+          fills, binary position pairing, settlements,
+          and recorded Kalshi fees.
+        </div>
+      </div>
+
+      <div style="
+          display:grid;
+          grid-template-columns:
+              repeat(auto-fit, minmax(135px,1fr));
+          gap:10px;
+          margin-bottom:14px;
+      ">
+        <div>
+          <span>Settled Trading P&amp;L</span>
+          <strong style="display:block;font-size:20px;">
+            {net_pnl}
+          </strong>
+        </div>
+
+        <div>
+          <span>Cash</span>
+          <strong style="display:block;font-size:20px;">
+            {cash}
+          </strong>
+        </div>
+
+        <div>
+          <span>BTC 15m P&amp;L</span>
+          <strong style="display:block;font-size:20px;">
+            {btc_pnl}
+          </strong>
+        </div>
+
+        <div>
+          <span>Record</span>
+          <strong style="display:block;font-size:20px;">
+            {wins}-{losses}
+          </strong>
+          <small>{win_rate} profitable markets</small>
+        </div>
+
+        <div>
+          <span>Fees</span>
+          <strong style="display:block;font-size:20px;">
+            {fees}
+          </strong>
+        </div>
+
+        <div>
+          <span>Profit factor</span>
+          <strong style="display:block;font-size:20px;">
+            {profit_factor}
+          </strong>
+        </div>
+
+        <div>
+          <span>Avg winner</span>
+          <strong style="display:block;font-size:20px;">
+            {avg_win}
+          </strong>
+        </div>
+
+        <div>
+          <span>Avg loser</span>
+          <strong style="display:block;font-size:20px;">
+            {avg_loss}
+          </strong>
+        </div>
+
+        <div>
+          <span>Max drawdown</span>
+          <strong style="display:block;font-size:20px;">
+            {max_drawdown}
+          </strong>
+        </div>
+      </div>
+
+      <div style="
+          display:grid;
+          grid-template-columns:
+              repeat(auto-fit,minmax(180px,1fr));
+          gap:10px;
+          padding:10px 0;
+          border-top:
+              1px solid rgba(127,127,127,.22);
+          border-bottom:
+              1px solid rgba(127,127,127,.22);
+          margin-bottom:12px;
+          font-size:13px;
+      ">
+        <div>
+          <strong>{markets}</strong>
+          settled markets
+          · <strong>{fills}</strong> fills
+        </div>
+
+        <div>
+          Prospective:
+          <strong>{opportunities}</strong> captured
+          · <strong>{labeled}</strong> labeled
+          · <strong>{pending}</strong> pending
+        </div>
+
+        <div>
+          Live trade snapshots:
+          <strong>{live_fills}</strong>
+          · base-setup fills
+          <strong>{qualified_fills}</strong>
+        </div>
+
+        <div>
+          BTC15M:
+          <strong>{btc_markets}</strong>
+          settled markets
+        </div>
+      </div>
+
+      <div style="
+          margin:14px 0;
+          padding:12px;
+          border:
+              1px solid rgba(127,127,127,.25);
+          border-radius:10px;
+      ">
+        <div style="
+            font-size:12px;
+            text-transform:uppercase;
+            letter-spacing:.07em;
+            opacity:.72;
+            margin-bottom:8px;
+        ">
+          System vs You · Live-era attribution
+        </div>
+
+        <div style="
+            display:grid;
+            grid-template-columns:
+                repeat(auto-fit,minmax(165px,1fr));
+            gap:12px;
+        ">
+          <div>
+            <span>
+              Qualified + traded
+            </span>
+
+            <strong style="
+                display:block;
+                font-size:18px;
+            ">
+              {qualified_traded_count}
+            </strong>
+
+            <small>
+              closed {qualified_closed}
+              · P&amp;L {qualified_pnl}
+              · avg {qualified_avg}
+            </small>
+          </div>
+
+          <div>
+            <span>
+              Qualified + skipped
+            </span>
+
+            <strong style="
+                display:block;
+                font-size:18px;
+            ">
+              {qualified_skipped}
+            </strong>
+
+            <small>
+              labeled {skipped_labeled}
+              · TP rate {skipped_tp_rate}
+              · avg gross {skipped_avg}
+            </small>
+          </div>
+
+          <div>
+            <span>
+              PASS + traded anyway
+            </span>
+
+            <strong style="
+                display:block;
+                font-size:18px;
+            ">
+              {pass_count}
+            </strong>
+
+            <small>
+              closed {pass_closed}
+              · P&amp;L {pass_pnl}
+              · avg {pass_avg}
+            </small>
+          </div>
+
+          <div>
+            <span>
+              No system data
+            </span>
+
+            <strong style="
+                display:block;
+                font-size:18px;
+            ">
+              {no_data_count}
+            </strong>
+
+            <small>
+              Historical/manual sessions before
+              synchronized live evidence existed.
+            </small>
+          </div>
+        </div>
+
+        <div style="
+            font-size:12px;
+            opacity:.72;
+            margin-top:10px;
+        ">
+          These are descriptive live-era results.
+          BRTI/order-flow/L2 are not promoted to
+          high-conviction filters until prospective
+          evidence validates them.
+        </div>
+      </div>
+
+      <details
+        data-persist-key="settled-trade-history"
+      >
+        <summary style="
+            cursor:pointer;
+            font-weight:700;
+            padding:4px 0 10px 0;
+        ">
+          Full settled trade history
+          ({markets} markets)
+        </summary>
+
+        <div
+          data-persist-scroll="settled-trade-history"
+          style="
+            overflow-x:auto;
+            max-height:520px;
+            overflow-y:auto;
+          "
+        >
+          <table>
+            <thead>
+              <tr>
+                <th>Settled</th>
+                <th>Market</th>
+                <th>Result</th>
+                <th>Net P&amp;L</th>
+                <th>Fees</th>
+                <th>Fills</th>
+                <th>Gross Cost</th>
+                <th>Gross Payout</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {history_rows}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+    """.format(
+        net_pnl=_money(
+            stats["pnl"],
+            signed=True,
+        ),
+
+        cash=_money(
+            personal["cash"]
+        ),
+
+        btc_pnl=_money(
+            btc["pnl"],
+            signed=True,
+        ),
+
+        wins=stats["wins"],
+        losses=stats["losses"],
+        win_rate=win_rate,
+
+        fees=_money(
+            personal["fees"]
+        ),
+
+        profit_factor=(
+            profit_factor
+        ),
+
+        avg_win=avg_win,
+        avg_loss=avg_loss,
+
+        max_drawdown=_money(
+            -stats[
+                "max_drawdown"
+            ],
+            signed=True,
+        ),
+
+        markets=stats["markets"],
+        fills=personal["fills"],
+
+        opportunities=(
+            prospective["total"]
+        ),
+
+        labeled=(
+            prospective["labeled"]
+        ),
+
+        pending=(
+            prospective["pending"]
+        ),
+
+        live_fills=(
+            fill_capture[
+                "with_features"
+            ]
+        ),
+
+        qualified_fills=(
+            fill_capture[
+                "qualified"
+            ]
+        ),
+
+        btc_markets=(
+            btc["markets"]
+        ),
+
+        history_rows=(
+            history_rows
+        ),
+
+        qualified_traded_count=(
+            qualified[
+                "sessions"
+            ]
+        ),
+
+        qualified_closed=(
+            qualified[
+                "closed"
+            ]
+        ),
+
+        qualified_pnl=(
+            attribution_pnl(
+                qualified
+            )
+        ),
+
+        qualified_avg=(
+            attribution_avg(
+                qualified
+            )
+        ),
+
+        qualified_skipped=(
+            attribution[
+                "qualified_and_skipped"
+            ]
+        ),
+
+        skipped_labeled=(
+            attribution[
+                "skipped_labeled"
+            ]
+        ),
+
+        skipped_tp_rate=(
+            "-"
+            if attribution[
+                "skipped_tp_rate"
+            ] is None
+            else (
+                f"{attribution['skipped_tp_rate'] * 100:.1f}%"
+            )
+        ),
+
+        skipped_avg=(
+            skipped_avg_text
+        ),
+
+        pass_count=(
+            passed[
+                "sessions"
+            ]
+        ),
+
+        pass_closed=(
+            passed[
+                "closed"
+            ]
+        ),
+
+        pass_pnl=(
+            attribution_pnl(
+                passed
+            )
+        ),
+
+        pass_avg=(
+            attribution_avg(
+                passed
+            )
+        ),
+
+        no_data_count=(
+            no_data[
+                "sessions"
+            ]
+        ),
+    )
+
+
+
 def render_live_market_fragment(
     output_path: str | Path,
     active_views,
     validated_strategies,
     health=None,
     brti=None,
+    personal=None,
 ) -> None:
     """Write only the lightweight live decision UI."""
 
@@ -999,23 +1689,84 @@ def render_live_market_fragment(
     # One full-width root prevents the dashboard's outer
     # grid from treating health/BRTI/cards as peer cells.
     rendered = f"""
+    <style>
+      /*
+       * Keep rapidly changing live text from changing the
+       * geometry of the decision cards every refresh.
+       */
+
+      .market-card {{
+        min-width: 0;
+      }}
+
+      .market-card-top {{
+        min-height: 92px;
+        align-items: flex-start;
+      }}
+
+      .market-card-top h3 {{
+        min-height: 1.4em;
+        line-height: 1.4;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }}
+
+      .live-price-block {{
+        min-width: 132px;
+      }}
+
+      .live-price {{
+        font-variant-numeric: tabular-nums;
+        min-width: 4.5ch;
+      }}
+
+      .quote-age {{
+        display: block;
+        min-height: 16px;
+        line-height: 16px;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }}
+
+      .live-countdown {{
+        display: inline-block;
+        min-width: 4.5ch;
+        font-variant-numeric: tabular-nums;
+      }}
+
+      .decision-state {{
+        min-height: 82px;
+      }}
+    </style>
+
     <div style="
         grid-column:1 / -1;
         width:100%;
         min-width:0;
     ">
-      {_render_health_strip(health)}
+      <!--LIVE_FAST_START-->
+      <div id="live-fast-region">
+        {_render_health_strip(health)}
 
-      <div style="
-          display:grid;
-          grid-template-columns:
-              repeat(3, minmax(0, 1fr));
-          gap:12px;
-          align-items:start;
-          width:100%;
-      ">
-        {primary_html}
+        <div style="
+            display:grid;
+            grid-template-columns:
+                repeat(3, minmax(0, 1fr));
+            gap:12px;
+            align-items:start;
+            width:100%;
+        ">
+          {primary_html}
+        </div>
       </div>
+      <!--LIVE_FAST_END-->
+
+      <!--PERSONAL_LEDGER_START-->
+      <div id="personal-ledger-region">
+        {render_personal_performance(personal)}
+      </div>
+      <!--PERSONAL_LEDGER_END-->
     </div>
     """
 
@@ -1349,6 +2100,8 @@ def render_html_report(
         auto_refresh_script = """
 <script>
 let lastLiveMarketHtml = null;
+let lastPersonalLedgerRefreshMs = 0;
+let personalLedgerInteractionUntil = 0;
 
 async function refreshLiveMarket() {
   try {
@@ -1371,7 +2124,280 @@ async function refreshLiveMarket() {
         document.getElementById("live-market-grid");
 
       if (container) {
-        container.innerHTML = html;
+
+        /*
+         * FAST PATH
+         *
+         * Prices/BRTI/health may update every 100ms.
+         * The personal ledger must NOT participate in
+         * those high-frequency DOM replacements.
+         */
+
+        const currentFast =
+          container.querySelector(
+            "#live-fast-region"
+          );
+
+        const currentPersonal =
+          container.querySelector(
+            "#personal-ledger-region"
+          );
+
+        /*
+         * On the first refresh after page load the
+         * region wrappers may not exist yet. Allow the
+         * old fallback replacement code below to build
+         * the initial structure.
+         */
+        if (currentFast) {
+          const fastStartMarker =
+            "<!--LIVE_FAST_START-->";
+
+          const fastEndMarker =
+            "<!--LIVE_FAST_END-->";
+
+          const fastStart =
+            html.indexOf(
+              fastStartMarker
+            );
+
+          const fastEnd =
+            html.indexOf(
+              fastEndMarker
+            );
+
+          if (
+            fastStart !== -1 &&
+            fastEnd !== -1 &&
+            fastEnd > fastStart
+          ) {
+            const fastHtml =
+              html.slice(
+                fastStart +
+                  fastStartMarker.length,
+                fastEnd
+              );
+
+            const fastTemplate =
+              document.createElement(
+                "template"
+              );
+
+            fastTemplate.innerHTML =
+              fastHtml.trim();
+
+            const nextFast =
+              fastTemplate.content
+                .querySelector(
+                  "#live-fast-region"
+                );
+
+            if (nextFast) {
+              currentFast.replaceWith(
+                nextFast
+              );
+            }
+          }
+
+          /*
+           * Personal account information changes much
+           * more slowly than market quotes.
+           *
+           * Refresh it at most every five seconds and
+           * NEVER while the history dropdown is open
+           * or the user is interacting with it.
+           */
+          const now =
+            Date.now();
+
+          const historyOpen =
+            container.querySelector(
+              'details[data-persist-key="settled-trade-history"]'
+            )?.open ?? false;
+
+          const interacting =
+            now <
+            personalLedgerInteractionUntil;
+
+          if (
+            currentPersonal &&
+            !historyOpen &&
+            !interacting &&
+            (
+              now -
+              lastPersonalLedgerRefreshMs
+              >= 5000
+            )
+          ) {
+            const personalStartMarker =
+              "<!--PERSONAL_LEDGER_START-->";
+
+            const personalEndMarker =
+              "<!--PERSONAL_LEDGER_END-->";
+
+            const personalStart =
+              html.indexOf(
+                personalStartMarker
+              );
+
+            const personalEnd =
+              html.indexOf(
+                personalEndMarker
+              );
+
+            if (
+              personalStart !== -1 &&
+              personalEnd !== -1 &&
+              personalEnd >
+                personalStart
+            ) {
+              const personalHtml =
+                html.slice(
+                  personalStart +
+                    personalStartMarker.length,
+                  personalEnd
+                );
+
+              const personalTemplate =
+                document.createElement(
+                  "template"
+                );
+
+              personalTemplate.innerHTML =
+                personalHtml.trim();
+
+              const nextPersonal =
+                personalTemplate.content
+                  .querySelector(
+                    "#personal-ledger-region"
+                  );
+
+              if (nextPersonal) {
+                currentPersonal.replaceWith(
+                  nextPersonal
+                );
+
+                lastPersonalLedgerRefreshMs =
+                  now;
+              }
+            }
+          }
+
+          lastLiveMarketHtml =
+            html;
+
+          /*
+           * Critical: do NOT fall through to the old
+           * whole-fragment replacement path.
+           */
+          return;
+        }
+
+        // Preserve UI state that should survive live
+        // quote/BRTI refreshes.
+        const detailState = new Map();
+
+        container
+          .querySelectorAll(
+            "details[data-persist-key]"
+          )
+          .forEach((element) => {
+            detailState.set(
+              element.dataset.persistKey,
+              {
+                open: element.open,
+
+                scrollTop: (
+                  element.querySelector(
+                    "[data-persist-scroll]"
+                  )?.scrollTop
+                  ?? 0
+                ),
+              }
+            );
+          });
+
+        // Build the replacement DOM off-screen first,
+        // restore state there, and only then swap it in.
+        // This avoids a visible close/reopen flicker.
+        const template =
+          document.createElement("template");
+
+        template.innerHTML = html;
+
+        template.content
+          .querySelectorAll(
+            "details[data-persist-key]"
+          )
+          .forEach((element) => {
+            const state = detailState.get(
+              element.dataset.persistKey
+            );
+
+            if (state) {
+              element.open = state.open;
+            }
+          });
+
+        // If the user currently has a persistent
+        // <details> section open, keep the ACTUAL DOM
+        // node rather than destroying/recreating it.
+        //
+        // This preserves:
+        //   - open/closed state
+        //   - scroll position
+        //   - focus/selection
+        // even while the rest of the live fragment changes.
+        container
+          .querySelectorAll(
+            "details[data-persist-key]"
+          )
+          .forEach((existingDetails) => {
+            if (!existingDetails.open) {
+              return;
+            }
+
+            const key =
+              existingDetails.dataset.persistKey;
+
+            const replacementDetails =
+              template.content.querySelector(
+                `details[data-persist-key="${key}"]`
+              );
+
+            if (replacementDetails) {
+              replacementDetails.replaceWith(
+                existingDetails
+              );
+            }
+          });
+
+        container.replaceChildren(
+          template.content
+        );
+
+        container
+          .querySelectorAll(
+            "details[data-persist-key]"
+          )
+          .forEach((element) => {
+            const state = detailState.get(
+              element.dataset.persistKey
+            );
+
+            const scrollElement =
+              element.querySelector(
+                "[data-persist-scroll]"
+              );
+
+            if (
+              state &&
+              scrollElement
+            ) {
+              scrollElement.scrollTop =
+                state.scrollTop;
+            }
+          });
       }
 
       lastLiveMarketHtml = html;
@@ -1383,6 +2409,52 @@ async function refreshLiveMarket() {
 
 refreshLiveMarket();
 setInterval(refreshLiveMarket, 100);
+
+/*
+ * Suppress personal-ledger replacement briefly around
+ * direct user interaction. Event delegation works even
+ * after the ledger itself is refreshed.
+ */
+document.addEventListener(
+  "pointerdown",
+  (event) => {
+    const target =
+      event.target;
+
+    if (
+      target instanceof Element &&
+      target.closest(
+        "#personal-ledger-region"
+      )
+    ) {
+      personalLedgerInteractionUntil =
+        Date.now() + 1500;
+    }
+  },
+  true
+);
+
+document.addEventListener(
+  "wheel",
+  (event) => {
+    const target =
+      event.target;
+
+    if (
+      target instanceof Element &&
+      target.closest(
+        "#personal-ledger-region"
+      )
+    ) {
+      personalLedgerInteractionUntil =
+        Date.now() + 1000;
+    }
+  },
+  {
+    capture: true,
+    passive: true,
+  }
+);
 
 function updateFastLiveFields() {
   const nowMs = Date.now();

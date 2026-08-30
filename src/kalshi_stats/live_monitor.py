@@ -19,6 +19,10 @@ from .live import (
     build_live_side_views,
     select_current_market,
 )
+from .personal_performance import (
+    build_personal_performance,
+    personal_performance_signature,
+)
 from .reporting import render_live_market_fragment
 from .sync import (
     discover_pending_finalizations,
@@ -304,8 +308,45 @@ async def run_websocket_live_loop(
     last_event_latency_ms: int | None = None
     brti_state: dict[str, object] | None = None
 
+    personal_state = None
+    last_personal_check = 0.0
+
     finalization_task = None
     finalization_ticker: str | None = None
+
+    def refresh_personal(
+        *,
+        force: bool = False,
+    ) -> None:
+        nonlocal personal_state
+        nonlocal last_personal_check
+
+        now = time.monotonic()
+
+        if (
+            not force
+            and now
+            - last_personal_check
+            < 5.0
+        ):
+            return
+
+        last_personal_check = now
+
+        try:
+            personal_state = (
+                build_personal_performance(
+                    connection
+                )
+            )
+
+        except Exception as exc:
+            print(
+                "PERSONAL LEDGER WARNING | "
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+
 
     async def service_model_rebuild() -> None:
         nonlocal model_process
@@ -713,6 +754,7 @@ async def run_websocket_live_loop(
             await service_pending_finalizations()
             await service_model_rebuild()
             refresh_health()
+            refresh_personal()
 
             try:
                 markets = client.get_active_markets(
@@ -748,6 +790,7 @@ async def run_websocket_live_loop(
                     cache["validated_strategies"],
                     health=health_state,
                     brti=brti_state,
+                    personal=personal_state,
                 )
 
                 if previous_market is not None:
@@ -831,6 +874,8 @@ async def run_websocket_live_loop(
                     "validated_strategies"
                 ],
                 health=health_state,
+                brti=brti_state,
+                personal=personal_state,
             )
 
             close_ts = (
@@ -881,6 +926,7 @@ async def run_websocket_live_loop(
                         )
 
                         refresh_health()
+                        refresh_personal()
 
                         ticker_update = None
 
@@ -1016,6 +1062,9 @@ async def run_websocket_live_loop(
                             brti_state_signature(
                                 brti_state
                             ),
+                            personal_performance_signature(
+                                personal_state
+                            ),
                             tuple(
                                 (
                                     view.side,
@@ -1038,6 +1087,7 @@ async def run_websocket_live_loop(
                                 ],
                                 health=health_state,
                                 brti=brti_state,
+                                personal=personal_state,
                             )
 
                             last_signature = (
