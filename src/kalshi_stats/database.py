@@ -145,6 +145,81 @@ CREATE TABLE IF NOT EXISTS btc_feature_snapshots (
 CREATE INDEX IF NOT EXISTS idx_btc_features_source_ts
 ON btc_feature_snapshots (source, ts);
 
+CREATE TABLE IF NOT EXISTS historical_market_features (
+    market_ticker TEXT NOT NULL,
+    observed_ts INTEGER NOT NULL,
+
+    feature_version INTEGER NOT NULL,
+
+    result TEXT NOT NULL,
+    candle_source TEXT,
+
+    kalshi_price_close REAL NOT NULL,
+    kalshi_price_low REAL NOT NULL,
+    kalshi_price_high REAL NOT NULL,
+
+    yes_bid_close REAL,
+    yes_ask_close REAL,
+
+    seconds_remaining INTEGER NOT NULL,
+
+    threshold REAL NOT NULL,
+
+    btc_source TEXT NOT NULL,
+    btc_ts INTEGER NOT NULL,
+    btc_age_ms INTEGER NOT NULL,
+
+    spot REAL NOT NULL,
+
+    threshold_distance_dollars REAL NOT NULL,
+    threshold_distance_pct REAL NOT NULL,
+    threshold_distance_bps REAL NOT NULL,
+    threshold_distance_vol60 REAL,
+
+    return_30s REAL,
+    return_60s REAL,
+    return_180s REAL,
+    return_300s REAL,
+
+    ema_5s REAL,
+    ema_9s REAL,
+    ema_21s REAL,
+
+    ema_5s_9s_bps REAL,
+    ema_9s_21s_bps REAL,
+
+    ema_5s_slope_bps REAL,
+    ema_9s_slope_bps REAL,
+    ema_21s_slope_bps REAL,
+
+    vwap_60s_proxy REAL,
+    vwap_300s_proxy REAL,
+
+    vwap_distance_60s_bps REAL,
+    vwap_distance_300s_bps REAL,
+
+    realized_vol_60s_bps REAL,
+    realized_vol_300s_bps REAL,
+
+    range_60s_bps REAL,
+    range_300s_bps REAL,
+
+    btc_volume_60s REAL,
+    btc_volume_300s REAL,
+    relative_volume_60s REAL,
+
+    PRIMARY KEY (
+        market_ticker,
+        observed_ts
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_historical_market_features_ts
+ON historical_market_features (observed_ts);
+
+CREATE INDEX IF NOT EXISTS idx_historical_market_features_result
+ON historical_market_features (result);
+
 CREATE TABLE IF NOT EXISTS brti_snapshots (
     index_id TEXT NOT NULL,
     ts INTEGER NOT NULL,
