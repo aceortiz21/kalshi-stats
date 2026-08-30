@@ -145,6 +145,29 @@ CREATE TABLE IF NOT EXISTS btc_feature_snapshots (
 CREATE INDEX IF NOT EXISTS idx_btc_features_source_ts
 ON btc_feature_snapshots (source, ts);
 
+CREATE TABLE IF NOT EXISTS brti_snapshots (
+    index_id TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    received_at INTEGER,
+
+    value REAL NOT NULL,
+
+    avg_60s_value REAL,
+    avg_60s_window_size INTEGER,
+    avg_60s_window_start_ts_ms INTEGER,
+    avg_60s_window_end_ts_exclusive INTEGER,
+
+    final_60s_avg_15m REAL,
+    final_60s_window_size_15m INTEGER,
+    final_60s_window_start_ts_ms_15m INTEGER,
+    final_60s_window_end_ts_exclusive_15m INTEGER,
+
+    PRIMARY KEY (index_id, ts)
+);
+
+CREATE INDEX IF NOT EXISTS idx_brti_snapshots_ts
+ON brti_snapshots (ts);
+
 CREATE TABLE IF NOT EXISTS market_feature_snapshots (
     market_ticker TEXT NOT NULL,
     ts INTEGER NOT NULL,

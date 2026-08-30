@@ -15,6 +15,7 @@ URL="http://127.0.0.1:8000/reports/dashboard.html"
 
 SERVER_PID=""
 BTC_SUPERVISOR_PID=""
+BRTI_SUPERVISOR_PID=""
 SYNC_SUPERVISOR_PID=""
 
 if [[ ! -x "$PYTHON" ]]; then
@@ -154,6 +155,7 @@ cleanup() {
     echo "Stopping managed services..."
 
     stop_supervisor "$SYNC_SUPERVISOR_PID"
+    stop_supervisor "$BRTI_SUPERVISOR_PID"
     stop_supervisor "$BTC_SUPERVISOR_PID"
 
     if [[ -n "$SERVER_PID" ]]; then
@@ -235,6 +237,24 @@ sleep 1
 
 
 # ============================================================
+# Official Kalshi / CF Benchmarks BRTI collector
+# ============================================================
+
+if pgrep -f     'python.*-m kalshi_stats\.brti_live'     >/dev/null 2>&1
+then
+    echo "BRTI collector already running."
+else
+    : > reports/brti_live.log
+
+    supervise_service         "Kalshi BRTI collector"         "reports/brti_live.log"         -m kalshi_stats.brti_live         --db "$DB"         --index BRTI         > /dev/null 2>&1 &
+
+    BRTI_SUPERVISOR_PID=$!
+
+    echo         "Official BRTI collector started "         "(log: reports/brti_live.log)"
+fi
+
+
+# ============================================================
 # Kalshi x BTC feature synchronizer
 # ============================================================
 
@@ -291,6 +311,7 @@ echo
 echo "Managed services:"
 echo "  Kalshi dashboard     foreground"
 echo "  Coinbase BTC         reports/btc_live.log"
+echo "  Official BRTI        reports/brti_live.log"
 echo "  Kalshi x BTC sync    reports/market_sync.log"
 echo
 echo "Press Ctrl+C to stop everything started here."
