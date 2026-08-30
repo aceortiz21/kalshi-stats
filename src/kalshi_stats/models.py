@@ -82,7 +82,8 @@ class ScenarioSummary:
     median_time_to_worst_price: float | None
     avg_price_after_seconds: dict[int, float | None]
     target_touch_counts: dict[float, int]
-    target_hit_rates: dict[float, float]
+    target_eligible_counts: dict[float, int]
+    target_hit_rates: dict[float, float | None]
     median_time_to_targets: dict[float, float | None]
     time_breakdown: dict[str, dict[str, float | int | None]]
     low_sample_warning: bool

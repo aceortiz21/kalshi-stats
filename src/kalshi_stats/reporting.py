@@ -33,8 +33,17 @@ def _targets(summary: ScenarioSummary) -> str:
     for target in SCENARIO_TARGETS:
         hit_rate = summary.target_hit_rates[target]
         count = summary.target_touch_counts[target]
+        eligible = summary.target_eligible_counts[target]
         median_time = summary.median_time_to_targets[target]
-        parts.append(f"{int(target * 100)}c {_pct(hit_rate)} ({count}/{summary.occurrences}), med {_seconds(median_time)}")
+
+        if eligible == 0:
+            parts.append(f"{int(target * 100)}c N/A (0 eligible)")
+        else:
+            parts.append(
+                f"{int(target * 100)}c {_pct(hit_rate)} "
+                f"({count}/{eligible} eligible), med {_seconds(median_time)}"
+            )
+
     return ", ".join(parts)
 
 
@@ -285,6 +294,56 @@ def render_html_report(
         for cell in matrix
     )
 
+    # Candidate states are deliberately selected with transparent rules.
+    # This is descriptive historical screening, not a profitability claim.
+    setup_candidates = sorted(
+        (
+            cell
+            for cell in matrix
+            if cell.path_observations >= 500
+            and cell.plus_10c_rate is not None
+        ),
+        key=lambda cell: (
+            cell.plus_10c_rate,
+            cell.plus_15c_rate or 0.0,
+            cell.path_observations,
+        ),
+        reverse=True,
+    )[:12]
+
+    setup_rows = "\n".join(
+        """
+        <tr>
+          <td>{rank}</td>
+          <td><strong>{price_bucket}</strong></td>
+          <td>{time_bucket}</td>
+          <td>{path_n}</td>
+          <td>{win_rate}</td>
+          <td>{plus_5}</td>
+          <td><strong>{plus_10}</strong></td>
+          <td>{plus_15}</td>
+          <td>{plus_20}</td>
+          <td>{median_best}</td>
+        </tr>
+        """.format(
+            rank=index,
+            price_bucket=html.escape(cell.price_bucket),
+            time_bucket=html.escape(cell.time_bucket),
+            path_n=f"{cell.path_observations:,}",
+            win_rate=_pct(cell.win_rate),
+            plus_5=_pct(cell.plus_5c_rate),
+            plus_10=_pct(cell.plus_10c_rate),
+            plus_15=_pct(cell.plus_15c_rate),
+            plus_20=_pct(cell.plus_20c_rate),
+            median_best=_price(cell.median_best_subsequent_price),
+        )
+        for index, cell in enumerate(setup_candidates, start=1)
+    ) or """
+        <tr>
+          <td colspan="10">No matrix states meet the current candidate requirements.</td>
+        </tr>
+    """
+
     notes = """
     Historical analysis uses real data already stored in the database. Scenario counting defaults to first entry per market unless a scenario explicitly opts into re-entry after cooldown. Markets with partial trade history are excluded from trade-based scenario analysis so they do not silently dilute the statistics.
     """
@@ -523,6 +582,52 @@ def render_html_report(
       }}
     }}
 
+
+    .guide-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }}
+
+    .guide-card {{
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: white;
+    }}
+
+    .guide-card h3 {{
+      margin: 0 0 7px;
+      font-size: 1rem;
+      color: var(--accent);
+    }}
+
+    .guide-card p {{
+      font-size: 0.88rem;
+      line-height: 1.45;
+    }}
+
+    .guide-card strong {{
+      color: var(--ink);
+    }}
+
+    .guide-workflow {{
+      margin-top: 16px;
+      padding: 16px 18px;
+      border-radius: 14px;
+      background: var(--accent-soft);
+    }}
+
+    .guide-workflow strong {{
+      display: block;
+      margin-bottom: 7px;
+    }}
+
+    .guide-workflow p {{
+      color: var(--ink);
+    }}
+
     .table-wrap {{
       overflow-x: auto;
       margin-top: 12px;
@@ -576,6 +681,136 @@ def render_html_report(
       <h2>Data Coverage / Health</h2>
       <p>Interpret any percentage in the rest of the dashboard through these coverage counts first.</p>
     </section>
+    <section>
+      <div class="section-heading">
+        <div>
+          <h2>How to Read This Dashboard</h2>
+          <p>
+            Quick reference for the statistics used throughout the page.
+            See USER_GUIDE.md for the complete explanation of every scenario
+            and metric.
+          </p>
+        </div>
+      </div>
+
+      <div class="guide-grid">
+
+        <div class="guide-card">
+          <h3>N</h3>
+          <p>
+            Number of qualifying historical observations. Use this primarily
+            when interpreting settlement statistics such as <strong>Win Rate</strong>.
+          </p>
+        </div>
+
+        <div class="guide-card">
+          <h3>Path N</h3>
+          <p>
+            Observations with valid future price data. Always check this before
+            trusting <strong>+5¢/+10¢ reach, Max Price, MFE, or MAE</strong>.
+          </p>
+        </div>
+
+        <div class="guide-card">
+          <h3>Win Rate</h3>
+          <p>
+            Percentage of historical observations where the studied side
+            eventually settled as the winner. This is different from the
+            probability of a temporary rebound.
+          </p>
+        </div>
+
+        <div class="guide-card">
+          <h3>+5¢ / +10¢ / +15¢ / +20¢</h3>
+          <p>
+            Relative price movement after the historical state. A +10¢ result
+            from 23¢ means the contract later reached approximately
+            <strong>33¢ or higher</strong>.
+          </p>
+        </div>
+
+        <div class="guide-card">
+          <h3>Median Max</h3>
+          <p>
+            Median highest subsequent contract price. This describes historical
+            opportunity—not a price you could have known to exit at in real time.
+          </p>
+        </div>
+
+        <div class="guide-card">
+          <h3>MFE</h3>
+          <p>
+            Maximum Favorable Excursion: the largest favorable move after the
+            trigger. Absolute cents are usually easier to interpret than MFE %
+            for very cheap contracts.
+          </p>
+        </div>
+
+        <div class="guide-card">
+          <h3>MAE</h3>
+          <p>
+            Maximum Adverse Excursion: the largest unfavorable move after the
+            trigger. It describes historical downside movement after entry.
+          </p>
+        </div>
+
+        <div class="guide-card">
+          <h3>Target Touch</h3>
+          <p>
+            A target such as <strong>40¢</strong> is an absolute contract price.
+            This is different from <strong>+10¢</strong>, which is relative to
+            the entry state.
+          </p>
+        </div>
+
+        <div class="guide-card">
+          <h3>Price × Time State</h3>
+          <p>
+            Historical observations grouped by both contract price and time
+            remaining. A 15¢ contract with 12 minutes left should not be treated
+            like a 15¢ contract with 30 seconds left.
+          </p>
+        </div>
+
+        <div class="guide-card">
+          <h3>Setup Finder</h3>
+          <p>
+            Automatically surfaces high-sample historical states. These are
+            <strong>research candidates</strong>, not validated trading signals.
+          </p>
+        </div>
+
+        <div class="guide-card">
+          <h3>95% CI</h3>
+          <p>
+            Statistical uncertainty around the observed Win Rate. A narrow
+            interval generally reflects greater sampling precision, not a
+            guarantee about future markets.
+          </p>
+        </div>
+
+        <div class="guide-card">
+          <h3>Unique Markets</h3>
+          <p>
+            Number of distinct 15-minute markets represented. This helps show
+            whether a result is broadly distributed rather than repeatedly
+            generated by only a few markets.
+          </p>
+        </div>
+
+      </div>
+
+      <div class="guide-workflow">
+        <strong>Live-market reading order</strong>
+        <p>
+          Price + time remaining → comparable historical state → Path N →
+          +5¢/+10¢/+15¢/+20¢ reach → Median Max → Win Rate → matching named
+          scenarios → current BTC context. Historical frequency is context,
+          not a guarantee or proof of profitability.
+        </p>
+      </div>
+    </section>
+
     <section class="live-section">
       <div class="section-heading">
         <div>
@@ -652,6 +887,49 @@ def render_html_report(
       </div>
       <div class="note">{notes}</div>
     </section>
+    <section>
+      <div class="section-heading">
+        <div>
+          <h2>Historical Setup Finder</h2>
+          <p>
+            High-sample historical price/time states ranked by subsequent
+            +10¢ reach rate. Candidates require at least 500 valid path
+            observations. These are research candidates, not validated
+            trading signals.
+          </p>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Price</th>
+              <th>Time Left</th>
+              <th>Path N</th>
+              <th>Win Rate</th>
+              <th>+5¢</th>
+              <th>+10¢</th>
+              <th>+15¢</th>
+              <th>+20¢</th>
+              <th>Median Max</th>
+            </tr>
+          </thead>
+          <tbody>
+            {setup_rows}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        Ranking is intentionally simple: +10¢ historical reach rate first,
+        then +15¢ reach rate and sample size. We will validate promising
+        states on unseen data before treating them as evidence of a
+        repeatable pattern.
+      </div>
+    </section>
+
     <section>
       <h2>Price × Time Matrix</h2>
       <p>Generic behavior for a side priced in a given bucket with a given amount of time left. This is the most broadly reusable reference table on the page.</p>

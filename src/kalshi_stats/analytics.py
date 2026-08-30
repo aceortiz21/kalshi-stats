@@ -569,7 +569,8 @@ def _summarize(definition: ScenarioDefinition, occurrences: list[ScenarioOccurre
             median_time_to_worst_price=None,
             avg_price_after_seconds={offset: None for offset in PRICE_AFTER_SECONDS},
             target_touch_counts={target: 0 for target in SCENARIO_TARGETS},
-            target_hit_rates={target: 0.0 for target in SCENARIO_TARGETS},
+            target_eligible_counts={target: 0 for target in SCENARIO_TARGETS},
+            target_hit_rates={target: None for target in SCENARIO_TARGETS},
             median_time_to_targets={target: None for target in SCENARIO_TARGETS},
             time_breakdown=_time_breakdown([]),
             low_sample_warning=True,
@@ -584,17 +585,40 @@ def _summarize(definition: ScenarioDefinition, occurrences: list[ScenarioOccurre
         for offset in PRICE_AFTER_SECONDS
     }
     target_touch_counts: dict[float, int] = {}
-    target_hit_rates: dict[float, float] = {}
+    target_eligible_counts: dict[float, int] = {}
+    target_hit_rates: dict[float, float | None] = {}
     median_time_to_targets: dict[float, float | None] = {}
+
     for target in SCENARIO_TARGETS:
+        # A target is eligible only when:
+        #   1. valid subsequent path data exists, and
+        #   2. the target is actually above the entry price.
+        #
+        # This prevents missing future paths from being counted as misses
+        # and prevents already-cleared prices from being treated as targets.
+        eligible = [
+            item
+            for item in occurrences
+            if item.best_subsequent_price is not None
+            and target > item.entry_price
+        ]
+
         hit_times = [
             item.target_hit_seconds[target]
-            for item in occurrences
+            for item in eligible
             if item.target_hit_seconds[target] is not None
         ]
+
         target_touch_counts[target] = len(hit_times)
-        target_hit_rates[target] = len(hit_times) / len(occurrences)
-        median_time_to_targets[target] = _safe_median([float(value) for value in hit_times])
+        target_eligible_counts[target] = len(eligible)
+        target_hit_rates[target] = (
+            len(hit_times) / len(eligible)
+            if eligible
+            else None
+        )
+        median_time_to_targets[target] = _safe_median(
+            [float(value) for value in hit_times]
+        )
 
     return ScenarioSummary(
         definition=definition,
@@ -677,6 +701,7 @@ def _summarize(definition: ScenarioDefinition, occurrences: list[ScenarioOccurre
         median_time_to_worst_price=_safe_median([float(item.time_to_worst_price) for item in occurrences if item.time_to_worst_price is not None]),
         avg_price_after_seconds=avg_price_after_seconds,
         target_touch_counts=target_touch_counts,
+        target_eligible_counts=target_eligible_counts,
         target_hit_rates=target_hit_rates,
         median_time_to_targets=median_time_to_targets,
         time_breakdown=_time_breakdown(occurrences),
