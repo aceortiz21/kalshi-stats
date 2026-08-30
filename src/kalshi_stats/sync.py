@@ -499,6 +499,74 @@ def backfill_recent_candles(
 
 
 
+
+def insert_ws_quote_snapshot(
+    connection: sqlite3.Connection,
+    *,
+    market_ticker: str,
+    yes_bid: float,
+    yes_ask: float,
+    last_price: float | None,
+    volume: float | None,
+    open_interest: float | None,
+    ts_ms: int,
+) -> None:
+    """Persist one downsampled WebSocket quote observation."""
+
+    collected_at = (
+        datetime.fromtimestamp(
+            ts_ms / 1000.0,
+            tz=timezone.utc,
+        )
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+    no_bid = max(
+        0.0,
+        min(1.0, 1.0 - yes_ask),
+    )
+
+    no_ask = max(
+        0.0,
+        min(1.0, 1.0 - yes_bid),
+    )
+
+    connection.execute(
+        """
+        INSERT OR REPLACE INTO quote_snapshots (
+            market_ticker,
+            collected_at,
+            status,
+            yes_bid,
+            yes_ask,
+            no_bid,
+            no_ask,
+            last_price,
+            volume,
+            open_interest
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            market_ticker,
+            collected_at,
+            "active",
+            yes_bid,
+            yes_ask,
+            no_bid,
+            no_ask,
+            last_price,
+            volume,
+            open_interest,
+        ),
+    )
+
+    connection.commit()
+
+
+
 def sync_live(connection: sqlite3.Connection, client: KalshiClient, series_ticker: str) -> dict[str, int]:
     active_markets = client.get_active_markets(series_ticker)
     market_rows = upsert_markets(connection, active_markets, series_ticker)

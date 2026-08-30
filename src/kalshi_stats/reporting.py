@@ -367,7 +367,7 @@ def render_live_decision_cards(
                     class="quote-age"
                     data-quote-ts-ms="{quote_ts_ms}"
                   >
-                    WEBSOCKET LIVE
+                    LAST PRICE CHANGE
                   </small>
                 </div>
               </div>
@@ -890,7 +890,7 @@ function updateFastLiveFields() {
         Number(element.dataset.quoteTsMs);
 
       if (!quoteTs) {
-        element.textContent = "LIVE";
+        element.textContent = "WAITING FOR PRICE CHANGE";
         return;
       }
 
@@ -900,9 +900,9 @@ function updateFastLiveFields() {
       );
 
       element.textContent =
-        "WEBSOCKET LIVE · " +
+        "LAST PRICE CHANGE · " +
         ageSeconds.toFixed(1) +
-        "s old";
+        "s AGO";
     });
 }
 

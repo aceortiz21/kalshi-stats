@@ -10,7 +10,10 @@ from .live import (
     select_current_market,
 )
 from .reporting import render_live_market_fragment
-from .sync import sync_live
+from .sync import (
+    insert_ws_quote_snapshot,
+    sync_live,
+)
 
 
 async def run_websocket_live_loop(
@@ -120,6 +123,8 @@ async def run_websocket_live_loop(
 
                 last_signature = None
                 last_log_time = 0.0
+                last_saved_second = None
+                captured_quotes = 0
 
                 while time.time() < close_ts:
                     ticker_update = None
@@ -150,6 +155,41 @@ async def run_websocket_live_loop(
                         quote_ts_ms = (
                             ticker_update.ts_ms
                         )
+
+                        event_second = (
+                            ticker_update.ts_ms // 1000
+                        )
+
+                        # Maximum one stored observation per
+                        # second. Rapid intra-second events still
+                        # drive the dashboard immediately but do
+                        # not explode the historical database.
+                        if (
+                            event_second
+                            != last_saved_second
+                        ):
+                            insert_ws_quote_snapshot(
+                                connection,
+                                market_ticker=ticker,
+                                yes_bid=yes_bid,
+                                yes_ask=yes_ask,
+                                last_price=(
+                                    ticker_update.last_price
+                                ),
+                                volume=(
+                                    ticker_update.volume
+                                ),
+                                open_interest=(
+                                    ticker_update.open_interest
+                                ),
+                                ts_ms=ticker_update.ts_ms,
+                            )
+
+                            last_saved_second = (
+                                event_second
+                            )
+
+                            captured_quotes += 1
 
                     # This lookup is deliberately cheap. It lets
                     # state/strategy changes happen immediately
@@ -209,8 +249,9 @@ async def run_websocket_live_loop(
                                 f"NO "
                                 f"{no_bid*100:.1f}/"
                                 f"{no_ask*100:.1f}c | "
-                                f"feed age "
-                                f"{message_age_ms}ms"
+                                f"event latency "
+                                f"{message_age_ms}ms | "
+                                f"saved {captured_quotes}"
                             )
 
                             last_log_time = now
