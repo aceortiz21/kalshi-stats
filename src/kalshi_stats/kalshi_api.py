@@ -129,6 +129,66 @@ class KalshiClient:
                 break
         return trades
 
+    def get_market(
+        self,
+        ticker: str,
+    ) -> dict[str, Any]:
+        """Return one market by ticker."""
+
+        data = self.get_json(
+            f"/markets/{ticker}"
+        )
+
+        return data["market"]
+
+
+    def get_market_candles(
+        self,
+        series_ticker: str,
+        market_ticker: str,
+        open_time: str,
+        close_time: str,
+        period_interval: int = 1,
+    ) -> list[dict[str, Any]]:
+        """Fetch recent/non-archived candles for one market."""
+
+        start_ts = int(
+            datetime.fromisoformat(
+                open_time.replace("Z", "+00:00")
+            ).timestamp()
+        )
+
+        close_dt = datetime.fromisoformat(
+            close_time.replace("Z", "+00:00")
+        )
+
+        # Include the final one-minute candle boundary.
+        end_ts = int(
+            (
+                close_dt
+                + timedelta(minutes=1)
+            ).timestamp()
+        )
+
+        data = self.get_json(
+            (
+                f"/series/{series_ticker}"
+                f"/markets/{market_ticker}"
+                f"/candlesticks"
+            ),
+            {
+                "start_ts": start_ts,
+                "end_ts": end_ts,
+                "period_interval": period_interval,
+            },
+        )
+
+        return data.get(
+            "candlesticks",
+            [],
+        )
+
+
     def get_active_markets(
         self,
         series_ticker: str,

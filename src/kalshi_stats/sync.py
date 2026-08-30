@@ -567,6 +567,179 @@ def insert_ws_quote_snapshot(
 
 
 
+
+def finalize_market_data(
+    connection: sqlite3.Connection,
+    client: KalshiClient,
+    *,
+    series_ticker: str,
+    market_ticker: str,
+) -> dict[str, object]:
+    """Ingest a market after it closes.
+
+    Safe to call repeatedly. Database upserts make retries
+    idempotent.
+    """
+
+    market = client.get_market(
+        market_ticker
+    )
+
+    upsert_markets(
+        connection,
+        [market],
+        series_ticker,
+    )
+
+    result = str(
+        market.get("result") or ""
+    ).lower()
+
+    status = str(
+        market.get("status") or ""
+    ).lower()
+
+    if result not in {"yes", "no"}:
+        return {
+            "market_ticker": market_ticker,
+            "settled": False,
+            "status": status,
+            "result": result or None,
+            "candles": 0,
+            "trades": 0,
+        }
+
+    open_time = str(
+        market.get("open_time") or ""
+    )
+
+    close_time = str(
+        market.get("close_time") or ""
+    )
+
+    if not open_time or not close_time:
+        raise RuntimeError(
+            f"{market_ticker} is missing "
+            "open_time/close_time"
+        )
+
+    candles = []
+
+    # A newly settled market should normally still be on the
+    # current candlestick endpoint. If Kalshi has already moved
+    # it across the historical cutoff, fall back automatically.
+    try:
+        candles = client.get_market_candles(
+            series_ticker,
+            market_ticker,
+            open_time,
+            close_time,
+            period_interval=1,
+        )
+
+    except Exception as recent_error:
+        try:
+            candles = client.get_historical_candles(
+                market_ticker,
+                open_time,
+                close_time,
+                period_interval=1,
+            )
+
+        except Exception as historical_error:
+            raise RuntimeError(
+                "Both recent and historical candle "
+                f"fetches failed for {market_ticker}. "
+                f"Recent: {recent_error}. "
+                f"Historical: {historical_error}"
+            ) from historical_error
+
+    candle_rows = 0
+
+    if candles:
+        candle_rows = upsert_candles(
+            connection,
+            market_ticker,
+            candles,
+            1,
+            "auto_finalize",
+        )
+
+    trades = []
+
+    try:
+        trades = client.get_trades(
+            market_ticker,
+            historical=False,
+        )
+
+    except Exception:
+        # This fallback matters if a pending market remains in
+        # the queue long enough to cross Kalshi's archive cutoff.
+        try:
+            trades = client.get_trades(
+                market_ticker,
+                historical=True,
+            )
+        except Exception:
+            trades = []
+
+    trade_rows = 0
+
+    if trades:
+        trade_rows = upsert_trades(
+            connection,
+            market_ticker,
+            trades,
+        )
+
+    total_candles = connection.execute(
+        """
+        SELECT COUNT(*)
+        FROM candles
+        WHERE market_ticker = ?
+          AND period_interval = 1
+        """,
+        (market_ticker,),
+    ).fetchone()[0]
+
+    total_trades = connection.execute(
+        """
+        SELECT COUNT(*)
+        FROM trades
+        WHERE market_ticker = ?
+        """,
+        (market_ticker,),
+    ).fetchone()[0]
+
+    total_snapshots = connection.execute(
+        """
+        SELECT COUNT(*)
+        FROM quote_snapshots
+        WHERE market_ticker = ?
+        """,
+        (market_ticker,),
+    ).fetchone()[0]
+
+    return {
+        "market_ticker": market_ticker,
+        "settled": True,
+        "status": status,
+        "result": result,
+        "candles": int(total_candles),
+        "new_candles": int(candle_rows),
+        "trades": int(total_trades),
+        "new_trades": int(trade_rows),
+        "snapshots": int(total_snapshots),
+
+        # We prefer the completed candle path before declaring
+        # the market fully ingested. Snapshot data remains useful
+        # even if trades happen to be unavailable.
+        "complete": int(total_candles) > 0,
+    }
+
+
+
 def sync_live(connection: sqlite3.Connection, client: KalshiClient, series_ticker: str) -> dict[str, int]:
     active_markets = client.get_active_markets(series_ticker)
     market_rows = upsert_markets(connection, active_markets, series_ticker)

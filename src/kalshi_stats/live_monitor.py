@@ -11,6 +11,7 @@ from .live import (
 )
 from .reporting import render_live_market_fragment
 from .sync import (
+    finalize_market_data,
     insert_ws_quote_snapshot,
     sync_live,
 )
@@ -33,6 +34,13 @@ async def run_websocket_live_loop(
     )
 
     previous_market: str | None = None
+
+    # Markets leave the live ticker at close before the final
+    # YES/NO result may be published. Keep them here and ingest
+    # them in the background of the NEXT live market.
+    pending_finalizations: dict[str, dict] = {}
+
+    last_finalize_check = 0.0
 
     while True:
         markets = client.get_active_markets(
@@ -128,6 +136,76 @@ async def run_websocket_live_loop(
 
                 while time.time() < close_ts:
                     ticker_update = None
+
+                    # Check one recently closed market at a time.
+                    # This is intentionally low-frequency REST
+                    # work; WebSocket pricing remains the fast
+                    # path.
+                    monotonic_now = time.monotonic()
+
+                    if (
+                        pending_finalizations
+                        and monotonic_now
+                        - last_finalize_check
+                        >= 5.0
+                    ):
+                        pending_ticker = next(
+                            iter(pending_finalizations)
+                        )
+
+                        try:
+                            finalized = (
+                                finalize_market_data(
+                                    connection,
+                                    client,
+                                    series_ticker=(
+                                        series_ticker
+                                    ),
+                                    market_ticker=(
+                                        pending_ticker
+                                    ),
+                                )
+                            )
+
+                            if finalized["settled"]:
+                                if finalized["complete"]:
+                                    print(
+                                        "INGESTED | "
+                                        f"{pending_ticker} | "
+                                        f"result="
+                                        f"{finalized['result']} | "
+                                        f"candles="
+                                        f"{finalized['candles']} | "
+                                        f"trades="
+                                        f"{finalized['trades']} | "
+                                        f"live snapshots="
+                                        f"{finalized['snapshots']}"
+                                    )
+
+                                    del pending_finalizations[
+                                        pending_ticker
+                                    ]
+
+                                else:
+                                    print(
+                                        "SETTLED, WAITING FOR "
+                                        "CANDLES | "
+                                        f"{pending_ticker} | "
+                                        f"result="
+                                        f"{finalized['result']}"
+                                    )
+
+                        except Exception as exc:
+                            print(
+                                "FINALIZE RETRY | "
+                                f"{pending_ticker} | "
+                                f"{type(exc).__name__}: "
+                                f"{exc}"
+                            )
+
+                        last_finalize_check = (
+                            monotonic_now
+                        )
 
                     try:
                         raw = await asyncio.wait_for(
@@ -288,7 +366,15 @@ async def run_websocket_live_loop(
                     except Exception:
                         pass
 
-        # The old market expired. Immediately discover the
-        # next 15-minute contract and establish a new stream.
+        # The old market expired. Queue it for result/candle/
+        # trade ingestion, then immediately discover the next
+        # 15-minute contract. We do NOT wait for settlement here.
+        pending_finalizations[ticker] = market
+
+        print(
+            "CLOSED | queued for ingestion:",
+            ticker,
+        )
+
         previous_market = None
         await asyncio.sleep(0.05)
