@@ -431,6 +431,49 @@ ON micro_multiplier_targets (
 
 
 
+
+CREATE TABLE IF NOT EXISTS micro_multiplier_atlas (
+    entry_price_key INTEGER NOT NULL,
+    time_bucket TEXT NOT NULL,
+    target_price_key INTEGER NOT NULL,
+
+    entry_price REAL NOT NULL,
+    target_price REAL NOT NULL,
+    multiplier REAL NOT NULL,
+
+    observations INTEGER NOT NULL,
+    unique_markets INTEGER NOT NULL,
+    hits INTEGER NOT NULL,
+
+    touch_rate REAL NOT NULL,
+    ci_low REAL NOT NULL,
+    ci_high REAL NOT NULL,
+
+    break_even_touch REAL NOT NULL,
+    conservative_edge REAL NOT NULL,
+
+    limit_only_ev REAL NOT NULL,
+    limit_only_roi REAL NOT NULL,
+
+    source_market_count INTEGER NOT NULL,
+    generated_at_ms INTEGER NOT NULL,
+
+    PRIMARY KEY (
+        entry_price_key,
+        time_bucket,
+        target_price_key
+    )
+);
+
+CREATE INDEX IF NOT EXISTS
+idx_micro_multiplier_atlas_lookup
+ON micro_multiplier_atlas (
+    entry_price_key,
+    time_bucket
+);
+
+
+
 CREATE TABLE IF NOT EXISTS fill_feature_snapshots (
     fill_id TEXT PRIMARY KEY,
 
