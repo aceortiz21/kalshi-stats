@@ -261,6 +261,139 @@ ON account_balance_snapshots (
 );
 
 
+
+CREATE TABLE IF NOT EXISTS prospective_opportunities (
+    opportunity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    strategy_id TEXT NOT NULL,
+    market_ticker TEXT NOT NULL,
+    side TEXT NOT NULL,
+
+    detected_at_ms INTEGER NOT NULL,
+    market_feature_ts INTEGER NOT NULL,
+
+    entry_bid REAL NOT NULL,
+    entry_ask REAL NOT NULL,
+    seconds_remaining REAL NOT NULL,
+
+    threshold REAL NOT NULL,
+    spot REAL NOT NULL,
+
+    side_threshold_distance_bps REAL,
+
+    return_60s_aligned REAL,
+    return_300s_aligned REAL,
+
+    vwap_distance_300s_bps_aligned REAL,
+    realized_vol_60s_bps REAL,
+
+    trade_imbalance_60s_aligned REAL,
+    trade_imbalance_300s_aligned REAL,
+    book_imbalance_top10_aligned REAL,
+
+    btc_spread_bps REAL,
+
+    brti_ts INTEGER,
+    brti_age_ms INTEGER,
+
+    brti_value REAL,
+    brti_avg_60s_value REAL,
+    brti_final_60s_avg_15m REAL,
+
+    brti_side_distance_dollars REAL,
+
+    label_status TEXT NOT NULL DEFAULT 'PENDING',
+
+    tp_hit INTEGER,
+    sl_hit INTEGER,
+    first_hit TEXT,
+
+    exit_ts_ms INTEGER,
+    exit_bid REAL,
+
+    gross_profit_per_contract REAL,
+    settlement_result TEXT,
+
+    UNIQUE (
+        strategy_id,
+        market_ticker,
+        side
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_prospective_opportunities_time
+ON prospective_opportunities (
+    detected_at_ms
+);
+
+
+CREATE TABLE IF NOT EXISTS fill_feature_snapshots (
+    fill_id TEXT PRIMARY KEY,
+
+    market_ticker TEXT NOT NULL,
+
+    fill_created_time TEXT,
+    fill_ts_ms INTEGER NOT NULL,
+
+    outcome_side TEXT NOT NULL,
+
+    count REAL NOT NULL,
+    fill_price REAL NOT NULL,
+
+    captured_at_ms INTEGER NOT NULL,
+
+    market_feature_ts INTEGER,
+    feature_age_ms INTEGER,
+
+    seconds_remaining REAL,
+
+    side_bid REAL,
+    side_ask REAL,
+
+    base_setup_qualified INTEGER NOT NULL DEFAULT 0,
+
+    threshold REAL,
+    spot REAL,
+
+    side_threshold_distance_bps REAL,
+
+    return_60s_aligned REAL,
+    return_300s_aligned REAL,
+
+    vwap_distance_300s_bps_aligned REAL,
+    realized_vol_60s_bps REAL,
+
+    trade_imbalance_60s_aligned REAL,
+    trade_imbalance_300s_aligned REAL,
+    book_imbalance_top10_aligned REAL,
+
+    btc_spread_bps REAL,
+
+    brti_ts INTEGER,
+    brti_age_ms INTEGER,
+
+    brti_value REAL,
+    brti_avg_60s_value REAL,
+    brti_final_60s_avg_15m REAL,
+
+    brti_side_distance_dollars REAL,
+
+    FOREIGN KEY (fill_id)
+        REFERENCES account_fills(fill_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fill_feature_snapshots_time
+ON fill_feature_snapshots (
+    fill_ts_ms
+);
+
+CREATE INDEX IF NOT EXISTS idx_fill_feature_snapshots_market
+ON fill_feature_snapshots (
+    market_ticker,
+    fill_ts_ms
+);
+
+
 CREATE TABLE IF NOT EXISTS historical_market_features (
     market_ticker TEXT NOT NULL,
     observed_ts INTEGER NOT NULL,

@@ -17,6 +17,8 @@ SERVER_PID=""
 BTC_SUPERVISOR_PID=""
 BRTI_SUPERVISOR_PID=""
 SYNC_SUPERVISOR_PID=""
+ACCOUNT_SUPERVISOR_PID=""
+PROSPECTIVE_SUPERVISOR_PID=""
 
 if [[ ! -x "$PYTHON" ]]; then
     echo "ERROR: .venv Python not found."
@@ -154,6 +156,8 @@ cleanup() {
     echo
     echo "Stopping managed services..."
 
+    stop_supervisor "$PROSPECTIVE_SUPERVISOR_PID"
+    stop_supervisor "$ACCOUNT_SUPERVISOR_PID"
     stop_supervisor "$SYNC_SUPERVISOR_PID"
     stop_supervisor "$BRTI_SUPERVISOR_PID"
     stop_supervisor "$BTC_SUPERVISOR_PID"
@@ -282,6 +286,62 @@ else
 fi
 
 
+
+# ============================================================
+# Personal Kalshi account synchronizer
+# ============================================================
+
+if pgrep -f \
+    'python.*-m kalshi_stats\.account_sync' \
+    >/dev/null 2>&1
+then
+    echo "Account synchronizer already running."
+else
+    : > reports/account_sync.log
+
+    supervise_service \
+        "Kalshi account synchronizer" \
+        "reports/account_sync.log" \
+        -m kalshi_stats.account_sync \
+        --db "$DB" \
+        --interval 15 \
+        > /dev/null 2>&1 &
+
+    ACCOUNT_SUPERVISOR_PID=$!
+
+    echo \
+        "Kalshi account synchronizer started " \
+        "(log: reports/account_sync.log)"
+fi
+
+
+# ============================================================
+# Prospective opportunity / fill-state logger
+# ============================================================
+
+if pgrep -f \
+    'python.*-m kalshi_stats\.prospective_logger' \
+    >/dev/null 2>&1
+then
+    echo "Prospective logger already running."
+else
+    : > reports/prospective.log
+
+    supervise_service \
+        "Prospective evidence logger" \
+        "reports/prospective.log" \
+        -m kalshi_stats.prospective_logger \
+        --db "$DB" \
+        > /dev/null 2>&1 &
+
+    PROSPECTIVE_SUPERVISOR_PID=$!
+
+    echo \
+        "Prospective evidence logger started " \
+        "(log: reports/prospective.log)"
+fi
+
+
 echo
 echo "Dashboard:"
 echo "$URL"
@@ -313,6 +373,8 @@ echo "  Kalshi dashboard     foreground"
 echo "  Coinbase BTC         reports/btc_live.log"
 echo "  Official BRTI        reports/brti_live.log"
 echo "  Kalshi x BTC sync    reports/market_sync.log"
+echo "  Account tracking     reports/account_sync.log"
+echo "  Prospective logger   reports/prospective.log"
 echo
 echo "Press Ctrl+C to stop everything started here."
 echo

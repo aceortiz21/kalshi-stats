@@ -863,6 +863,7 @@ def sync_once(
     client,
     *,
     subaccount=0,
+    include_historical=True,
 ):
     current_fills = (
         client.get_fills()
@@ -870,6 +871,8 @@ def sync_once(
 
     historical_fills = (
         client.get_historical_fills()
+        if include_historical
+        else []
     )
 
     settlements = (
@@ -1107,6 +1110,8 @@ def main():
 
             return
 
+        include_historical = True
+
         while True:
             try:
                 result = sync_once(
@@ -1115,7 +1120,12 @@ def main():
                     subaccount=(
                         args.subaccount
                     ),
+                    include_historical=(
+                        include_historical
+                    ),
                 )
+
+                include_historical = False
 
                 balance = result[
                     "balance"
