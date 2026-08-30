@@ -136,17 +136,41 @@ def _build_series_from_rows(
         return []
     close_ts = _iso_to_ts(close_time)
     if candle_rows:
+        if open_time is None:
+            return []
+
+        open_ts = _iso_to_ts(open_time)
+
+        # One-minute candles are timestamped by the end of their interval.
+        # Keep only candles belonging to the actual 15-minute market window.
+        valid_candles = [
+            row
+            for row in candle_rows
+            if open_ts < int(row["end_period_ts"]) <= close_ts
+        ]
+
+        if not valid_candles:
+            return []
+
+        # Exclude obviously incomplete histories so partial API responses do
+        # not silently become historical examples.
+        first_ts = int(valid_candles[0]["end_period_ts"])
+        last_ts = int(valid_candles[-1]["end_period_ts"])
+
+        if first_ts > open_ts + 120 or last_ts < close_ts - 60:
+            return []
+
         return [
             Observation(
                 observed_ts=int(row["end_period_ts"]),
-                seconds_remaining=max(0, close_ts - int(row["end_period_ts"])),
-                elapsed_seconds=900 - max(0, close_ts - int(row["end_period_ts"])),
+                seconds_remaining=close_ts - int(row["end_period_ts"]),
+                elapsed_seconds=900 - (close_ts - int(row["end_period_ts"])),
                 yes_close=float(row["price_close"]),
                 yes_low=float(row["price_low"]),
                 yes_high=float(row["price_high"]),
                 source="candle",
             )
-            for row in candle_rows
+            for row in valid_candles
         ]
 
     if snapshot_rows:
@@ -378,35 +402,74 @@ def _build_occurrence(
     traded_side = trigger_side if definition.trade_side == "same" else _opposite(trigger_side)
     entry_price = trigger_price if definition.trade_side == "same" else 1.0 - trigger_price
     entry_observation = series[matched_index]
-    future = series[matched_index:]
-    future_highs = [_side_low_high(observation, traded_side)[1] for observation in future]
-    future_lows = [_side_low_high(observation, traded_side)[0] for observation in future]
-    best_price = max(future_highs)
-    worst_price = min(future_lows)
-    best_index = future_highs.index(best_price)
-    worst_index = future_lows.index(worst_price)
-    time_to_best = future[best_index].observed_ts - entry_observation.observed_ts
-    time_to_worst = future[worst_index].observed_ts - entry_observation.observed_ts
-    max_favorable_excursion = best_price - entry_price
-    max_adverse_excursion = entry_price - worst_price
-    price_after_seconds = {
-        offset: _price_at_or_after(future, traded_side, offset) for offset in PRICE_AFTER_SECONDS
-    }
-    target_hit_seconds: dict[float, int | None] = {}
-    target_profit: dict[float, float] = {}
+
+    # A trade observation is an exact point-in-time price, so including that
+    # observation in the path is safe. A 1-minute OHLC candle is different:
+    # its high/low may have occurred before its close. Because the trigger
+    # entry is represented by the candle close, using that same candle's
+    # high/low as a subsequent move would introduce intrabar look-ahead.
+    if entry_observation.source == "candle":
+        future = series[matched_index + 1:]
+    else:
+        future = series[matched_index:]
+
     eventual_win = _eventual_win(market_result, traded_side)
     settlement_price = 1.0 if eventual_win else 0.0
+
+    if future:
+        future_highs = [_side_low_high(observation, traded_side)[1] for observation in future]
+        future_lows = [_side_low_high(observation, traded_side)[0] for observation in future]
+
+        best_price = max(future_highs)
+        worst_price = min(future_lows)
+
+        best_index = future_highs.index(best_price)
+        worst_index = future_lows.index(worst_price)
+
+        time_to_best = future[best_index].observed_ts - entry_observation.observed_ts
+        time_to_worst = future[worst_index].observed_ts - entry_observation.observed_ts
+
+        max_favorable_excursion = best_price - entry_price
+        max_adverse_excursion = entry_price - worst_price
+
+        max_favorable_excursion_pct = (
+            None if entry_price == 0 else max_favorable_excursion / entry_price
+        )
+        max_adverse_excursion_pct = (
+            None if entry_price == 0 else max_adverse_excursion / entry_price
+        )
+    else:
+        best_price = None
+        worst_price = None
+        time_to_best = None
+        time_to_worst = None
+        max_favorable_excursion = None
+        max_adverse_excursion = None
+        max_favorable_excursion_pct = None
+        max_adverse_excursion_pct = None
+
+    price_after_seconds = {
+        offset: _price_at_or_after(future, traded_side, offset)
+        for offset in PRICE_AFTER_SECONDS
+    }
+
+    target_hit_seconds: dict[float, int | None] = {}
+    target_profit: dict[float, float] = {}
+
     for target in SCENARIO_TARGETS:
         if target <= entry_price:
             target_hit_seconds[target] = None
             target_profit[target] = settlement_price - entry_price
             continue
+
         hit_seconds = None
+
         for observation in future:
             _, future_high = _side_low_high(observation, traded_side)
             if future_high >= target:
                 hit_seconds = observation.observed_ts - entry_observation.observed_ts
                 break
+
         target_hit_seconds[target] = hit_seconds
         exit_price = target if hit_seconds is not None else settlement_price
         target_profit[target] = exit_price - entry_price
@@ -425,8 +488,8 @@ def _build_occurrence(
         worst_subsequent_price=worst_price,
         max_favorable_excursion=max_favorable_excursion,
         max_adverse_excursion=max_adverse_excursion,
-        max_favorable_excursion_pct=None if entry_price == 0 else max_favorable_excursion / entry_price,
-        max_adverse_excursion_pct=None if entry_price == 0 else max_adverse_excursion / entry_price,
+        max_favorable_excursion_pct=max_favorable_excursion_pct,
+        max_adverse_excursion_pct=max_adverse_excursion_pct,
         time_to_best_price=time_to_best,
         time_to_worst_price=time_to_worst,
         price_after_seconds=price_after_seconds,
@@ -456,7 +519,13 @@ def _time_breakdown(occurrences: list[ScenarioOccurrence]) -> dict[str, dict[str
         result[label] = {
             "n": len(items),
             "win_rate": sum(item.eventual_win for item in items) / len(items),
-            "median_max_price": _safe_median([item.best_subsequent_price for item in items]),
+            "median_max_price": _safe_median(
+                [
+                    item.best_subsequent_price
+                    for item in items
+                    if item.best_subsequent_price is not None
+                ]
+            ),
         }
     return result
 
@@ -524,14 +593,62 @@ def _summarize(definition: ScenarioDefinition, occurrences: list[ScenarioOccurre
         win_rate_ci_high=ci_high,
         avg_entry_price=_safe_mean([item.entry_price for item in occurrences]),
         median_entry_price=_safe_median([item.entry_price for item in occurrences]),
-        avg_best_subsequent_price=_safe_mean([item.best_subsequent_price for item in occurrences]),
-        median_best_subsequent_price=_safe_median([item.best_subsequent_price for item in occurrences]),
-        avg_worst_subsequent_price=_safe_mean([item.worst_subsequent_price for item in occurrences]),
-        median_worst_subsequent_price=_safe_median([item.worst_subsequent_price for item in occurrences]),
-        avg_max_favorable_excursion=_safe_mean([item.max_favorable_excursion for item in occurrences]),
-        median_max_favorable_excursion=_safe_median([item.max_favorable_excursion for item in occurrences]),
-        avg_max_adverse_excursion=_safe_mean([item.max_adverse_excursion for item in occurrences]),
-        median_max_adverse_excursion=_safe_median([item.max_adverse_excursion for item in occurrences]),
+        avg_best_subsequent_price=_safe_mean(
+            [
+                item.best_subsequent_price
+                for item in occurrences
+                if item.best_subsequent_price is not None
+            ]
+        ),
+        median_best_subsequent_price=_safe_median(
+            [
+                item.best_subsequent_price
+                for item in occurrences
+                if item.best_subsequent_price is not None
+            ]
+        ),
+        avg_worst_subsequent_price=_safe_mean(
+            [
+                item.worst_subsequent_price
+                for item in occurrences
+                if item.worst_subsequent_price is not None
+            ]
+        ),
+        median_worst_subsequent_price=_safe_median(
+            [
+                item.worst_subsequent_price
+                for item in occurrences
+                if item.worst_subsequent_price is not None
+            ]
+        ),
+        avg_max_favorable_excursion=_safe_mean(
+            [
+                item.max_favorable_excursion
+                for item in occurrences
+                if item.max_favorable_excursion is not None
+            ]
+        ),
+        median_max_favorable_excursion=_safe_median(
+            [
+                item.max_favorable_excursion
+                for item in occurrences
+                if item.max_favorable_excursion is not None
+            ]
+        ),
+        avg_max_adverse_excursion=_safe_mean(
+            [
+                item.max_adverse_excursion
+                for item in occurrences
+                if item.max_adverse_excursion is not None
+            ]
+        ),
+        median_max_adverse_excursion=_safe_median(
+            [
+                item.max_adverse_excursion
+                for item in occurrences
+                if item.max_adverse_excursion is not None
+            ]
+        ),
         avg_max_favorable_excursion_pct=_safe_mean(
             [item.max_favorable_excursion_pct for item in occurrences if item.max_favorable_excursion_pct is not None]
         ),
@@ -608,10 +725,20 @@ def build_probability_matrix(
     settled_markets = settled_markets or _settled_markets_with_data(connection)
     series_map = series_map or _build_series_map(connection, settled_markets)
     buckets: dict[tuple[str, str], list[dict[str, float | bool | str]]] = defaultdict(list)
+    price_buckets_cents = [
+        (int(low * 100), int(high * 100), label)
+        for low, high, label in PRICE_BUCKETS
+    ]
+
     for market in settled_markets:
         series = series_map.get(market["ticker"])
         if not series:
             continue
+
+        # Do not let a market that trades heavily in one state contribute
+        # thousands of correlated observations to the historical matrix.
+        # Each side contributes at most once to a given price/time state.
+        seen_states: set[tuple[str, str, str]] = set()
 
         yes_future_best = [0.0] * len(series)
         no_future_best = [0.0] * len(series)
@@ -622,14 +749,28 @@ def build_probability_matrix(
         for index in range(len(series) - 1, -1, -1):
             observation = series[index]
 
-            yes_high = _side_low_high(observation, "yes")[1]
-            no_high = _side_low_high(observation, "no")[1]
+            # For candle observations, the current candle's high/low is not
+            # known to occur after the close used as the state price. Store
+            # the best price strictly after this candle. Exact trade/snapshot
+            # observations can safely include their current observation.
+            if observation.source == "candle":
+                yes_future_best[index] = running_yes_best
+                no_future_best[index] = running_no_best
 
-            running_yes_best = max(running_yes_best, yes_high)
-            running_no_best = max(running_no_best, no_high)
+                yes_high = _side_low_high(observation, "yes")[1]
+                no_high = _side_low_high(observation, "no")[1]
 
-            yes_future_best[index] = running_yes_best
-            no_future_best[index] = running_no_best
+                running_yes_best = max(running_yes_best, yes_high)
+                running_no_best = max(running_no_best, no_high)
+            else:
+                yes_high = _side_low_high(observation, "yes")[1]
+                no_high = _side_low_high(observation, "no")[1]
+
+                running_yes_best = max(running_yes_best, yes_high)
+                running_no_best = max(running_no_best, no_high)
+
+                yes_future_best[index] = running_yes_best
+                no_future_best[index] = running_no_best
 
         for index, observation in enumerate(series):
             for side in ("yes", "no"):
@@ -637,10 +778,7 @@ def build_probability_matrix(
 
                 price_label = _bucket_label(
                     int(round(current_price * 100)),
-                    [
-                        (int(low * 100), int(high * 100), label)
-                        for low, high, label in PRICE_BUCKETS
-                    ],
+                    price_buckets_cents,
                 )
 
                 time_label = _bucket_label(
@@ -648,24 +786,49 @@ def build_probability_matrix(
                     MATRIX_TIME_BUCKETS,
                 )
 
+                if price_label == "unknown" or time_label == "unknown":
+                    continue
+
+                state_key = (side, price_label, time_label)
+                if state_key in seen_states:
+                    continue
+                seen_states.add(state_key)
+
                 future_best = (
                     yes_future_best[index]
                     if side == "yes"
                     else no_future_best[index]
                 )
 
+                has_subsequent_path = not (
+                    observation.source == "candle"
+                    and index == len(series) - 1
+                )
+
                 buckets[(price_label, time_label)].append(
                     {
                         "won": _eventual_win(market["result"], side),
-                        "touch_30": future_best >= 0.30,
-                        "touch_35": future_best >= 0.35,
-                        "touch_40": future_best >= 0.40,
-                        "touch_50": future_best >= 0.50,
-                        "plus_5": future_best >= min(1.0, current_price + 0.05),
-                        "plus_10": future_best >= min(1.0, current_price + 0.10),
-                        "plus_15": future_best >= min(1.0, current_price + 0.15),
-                        "plus_20": future_best >= min(1.0, current_price + 0.20),
-                        "best_price": future_best,
+                        "touch_30": future_best >= 0.30 if has_subsequent_path else None,
+                        "touch_35": future_best >= 0.35 if has_subsequent_path else None,
+                        "touch_40": future_best >= 0.40 if has_subsequent_path else None,
+                        "touch_50": future_best >= 0.50 if has_subsequent_path else None,
+                        "plus_5": (
+                            future_best >= min(1.0, current_price + 0.05)
+                            if has_subsequent_path else None
+                        ),
+                        "plus_10": (
+                            future_best >= min(1.0, current_price + 0.10)
+                            if has_subsequent_path else None
+                        ),
+                        "plus_15": (
+                            future_best >= min(1.0, current_price + 0.15)
+                            if has_subsequent_path else None
+                        ),
+                        "plus_20": (
+                            future_best >= min(1.0, current_price + 0.20)
+                            if has_subsequent_path else None
+                        ),
+                        "best_price": future_best if has_subsequent_path else None,
                         "market_ticker": market["ticker"],
                     }
                 )
@@ -695,7 +858,20 @@ def build_probability_matrix(
                     )
                 )
                 continue
-            best_prices = [float(item["best_price"]) for item in items]
+            best_prices = [
+                float(item["best_price"])
+                for item in items
+                if item["best_price"] is not None
+            ]
+
+            def path_rate(key: str) -> float | None:
+                values = [
+                    bool(item[key])
+                    for item in items
+                    if item[key] is not None
+                ]
+                return sum(values) / len(values) if values else None
+
             cells.append(
                 MatrixCell(
                     price_bucket=price_label,
@@ -703,16 +879,16 @@ def build_probability_matrix(
                     observations=len(items),
                     unique_markets=len({str(item["market_ticker"]) for item in items}),
                     win_rate=sum(bool(item["won"]) for item in items) / len(items),
-                    touch_30_rate=sum(bool(item["touch_30"]) for item in items) / len(items),
-                    touch_35_rate=sum(bool(item["touch_35"]) for item in items) / len(items),
-                    touch_40_rate=sum(bool(item["touch_40"]) for item in items) / len(items),
-                    touch_50_rate=sum(bool(item["touch_50"]) for item in items) / len(items),
-                    plus_5c_rate=sum(bool(item["plus_5"]) for item in items) / len(items),
-                    plus_10c_rate=sum(bool(item["plus_10"]) for item in items) / len(items),
-                    plus_15c_rate=sum(bool(item["plus_15"]) for item in items) / len(items),
-                    plus_20c_rate=sum(bool(item["plus_20"]) for item in items) / len(items),
-                    avg_best_subsequent_price=mean(best_prices),
-                    median_best_subsequent_price=median(best_prices),
+                    touch_30_rate=path_rate("touch_30"),
+                    touch_35_rate=path_rate("touch_35"),
+                    touch_40_rate=path_rate("touch_40"),
+                    touch_50_rate=path_rate("touch_50"),
+                    plus_5c_rate=path_rate("plus_5"),
+                    plus_10c_rate=path_rate("plus_10"),
+                    plus_15c_rate=path_rate("plus_15"),
+                    plus_20c_rate=path_rate("plus_20"),
+                    avg_best_subsequent_price=mean(best_prices) if best_prices else None,
+                    median_best_subsequent_price=median(best_prices) if best_prices else None,
                 )
             )
     return cells
@@ -723,7 +899,7 @@ def build_live_scenario_board(
 ) -> list[LiveScenarioMatch]:
     latest_rows = connection.execute(
         """
-        SELECT m.ticker, m.status, m.close_time, s.yes_bid, s.yes_ask, s.collected_at
+        SELECT m.ticker, m.status, m.open_time, m.close_time, s.yes_bid, s.yes_ask, s.collected_at
         FROM markets m
         JOIN (
             SELECT market_ticker, MAX(collected_at) AS max_collected_at
@@ -741,8 +917,16 @@ def build_live_scenario_board(
     matches: list[LiveScenarioMatch] = []
     for row in latest_rows:
         observed_ts = _iso_to_ts(row["collected_at"])
+        open_ts = _iso_to_ts(row["open_time"])
         close_ts = _iso_to_ts(row["close_time"])
-        seconds_remaining = max(0, close_ts - observed_ts)
+
+        # Kalshi may return scheduled future markets with an active/open-like
+        # status. A market belongs on the live board only while its actual
+        # 15-minute trading window is in progress.
+        if not (open_ts <= observed_ts < close_ts):
+            continue
+
+        seconds_remaining = close_ts - observed_ts
         elapsed_seconds = 900 - seconds_remaining
         yes_price = _mid(float(row["yes_bid"]), float(row["yes_ask"]))
         side_prices = {"yes": yes_price, "no": 1.0 - yes_price}
@@ -778,7 +962,7 @@ def build_active_market_side_views(
 ) -> list[ActiveMarketSideView]:
     latest_rows = connection.execute(
         """
-        SELECT m.ticker, m.status, m.close_time, s.yes_bid, s.yes_ask, s.collected_at
+        SELECT m.ticker, m.status, m.open_time, m.close_time, s.yes_bid, s.yes_ask, s.collected_at
         FROM markets m
         JOIN (
             SELECT market_ticker, MAX(collected_at) AS max_collected_at
@@ -796,8 +980,16 @@ def build_active_market_side_views(
     views: list[ActiveMarketSideView] = []
     for row in latest_rows:
         observed_ts = _iso_to_ts(row["collected_at"])
+        open_ts = _iso_to_ts(row["open_time"])
         close_ts = _iso_to_ts(row["close_time"])
-        seconds_remaining = max(0, close_ts - observed_ts)
+
+        # Kalshi may return scheduled future markets with an active/open-like
+        # status. A market belongs on the live board only while its actual
+        # 15-minute trading window is in progress.
+        if not (open_ts <= observed_ts < close_ts):
+            continue
+
+        seconds_remaining = close_ts - observed_ts
         elapsed_seconds = 900 - seconds_remaining
         yes_price = _mid(float(row["yes_bid"]), float(row["yes_ask"]))
         for side, current_price in (("yes", yes_price), ("no", 1.0 - yes_price)):

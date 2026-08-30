@@ -18,6 +18,11 @@ def _price(value: float | None) -> str:
 def _seconds(value: float | None) -> str:
     return "-" if value is None else f"{value:.0f}s"
 
+def _clock(seconds: int | float) -> str:
+    seconds = max (0, int(seconds))
+    minutes, seconds = divmod(seconds, 60)
+    return f"{minutes}:{seconds:02d}"
+
 
 def _sample_badge(summary: ScenarioSummary) -> str:
     return "Low sample" if summary.low_sample_warning else "OK"
@@ -157,52 +162,85 @@ def render_html_report(
         <tr><td colspan="9">No active KXBTC15M markets currently match the configured scenario triggers.</td></tr>
     """
 
-    active_rows = "\n".join(
+        active_cards = "\n".join(
         """
-        <tr>
-          <td>{market}</td>
-          <td>{side}</td>
-          <td>{price}</td>
-          <td>{time_left}</td>
-          <td>{price_bucket}</td>
-          <td>{time_bucket}</td>
-          <td>{obs}</td>
-          <td>{win_rate}</td>
-          <td>{plus_5}</td>
-          <td>{plus_10}</td>
-          <td>{plus_15}</td>
-          <td>{plus_20}</td>
-          <td>{t30}</td>
-          <td>{t35}</td>
-          <td>{t40}</td>
-          <td>{t50}</td>
-          <td>{avg_best}</td>
-          <td>{median_best}</td>
-          <td>{matched}</td>
-        </tr>
+        <article class="market-card {side_class}">
+          <div class="market-card-top">
+            <div>
+              <span class="eyebrow">{side} CONTRACT</span>
+              <h3>{market}</h3>
+            </div>
+            <div class="live-price">{price}</div>
+          </div>
+
+          <div class="market-context">
+            <div>
+              <span>Time Remaining</span>
+              <strong>{time_left}</strong>
+            </div>
+            <div>
+              <span>Historical State</span>
+              <strong>{price_bucket} · {time_bucket}</strong>
+            </div>
+            <div>
+              <span>Historical N</span>
+              <strong>{obs}</strong>
+            </div>
+            <div>
+              <span>Eventual Win</span>
+              <strong>{win_rate}</strong>
+            </div>
+          </div>
+
+          <div class="section-label">Subsequent Price Reach</div>
+          <div class="target-grid">
+            <div><span>+5¢</span><strong>{plus_5}</strong></div>
+            <div><span>+10¢</span><strong>{plus_10}</strong></div>
+            <div><span>+15¢</span><strong>{plus_15}</strong></div>
+            <div><span>+20¢</span><strong>{plus_20}</strong></div>
+          </div>
+
+          <div class="market-footer">
+            <div>
+              <span>Median Subsequent Max</span>
+              <strong>{median_best}</strong>
+            </div>
+            <div>
+              <span>Average Subsequent Max</span>
+              <strong>{avg_best}</strong>
+            </div>
+          </div>
+
+          <div class="scenario-line">
+            <span>Matching scenarios</span>
+            <strong>{matched}</strong>
+          </div>
+        </article>
         """.format(
             market=html.escape(view.market_ticker),
             side=html.escape(view.side.upper()),
+            side_class="yes-side" if view.side.lower() == "yes" else "no-side",
             price=_price(view.current_price),
-            time_left=f"{view.seconds_remaining}s",
+            time_left=_clock(view.seconds_remaining),
             price_bucket=html.escape(view.price_bucket),
             time_bucket=html.escape(view.time_bucket),
-            obs=view.observations,
+            obs=f"{view.observations:,}",
             win_rate=_pct(view.win_rate),
             plus_5=_pct(view.plus_5c_rate),
             plus_10=_pct(view.plus_10c_rate),
             plus_15=_pct(view.plus_15c_rate),
             plus_20=_pct(view.plus_20c_rate),
-            t30=_pct(view.touch_30_rate),
-            t35=_pct(view.touch_35_rate),
-            t40=_pct(view.touch_40_rate),
-            t50=_pct(view.touch_50_rate),
             avg_best=_price(view.avg_best_subsequent_price),
             median_best=_price(view.median_best_subsequent_price),
-            matched=html.escape(", ".join(view.matched_scenarios) or "-"),
+            matched=html.escape(", ".join(view.matched_scenarios) or "None"),
         )
         for view in active_views
-    )
+    ) or """
+        <div class="empty-state">
+          <strong>No active KXBTC15M market in the stored snapshot.</strong>
+          <span>Run a live sync while a market is active to populate this board.</span>
+        </div>
+    """
 
     matrix_rows = "\n".join(
         """

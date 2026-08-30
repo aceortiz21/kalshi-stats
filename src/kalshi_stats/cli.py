@@ -61,6 +61,26 @@ def build_parser() -> argparse.ArgumentParser:
     recent_trades_parser.add_argument("--workers", type=int, default=4)
     recent_trades_parser.add_argument("--max-pages", type=int, default=None)
 
+    historical_trades_parser = subparsers.add_parser(
+        "backfill-historical-trades",
+        help="Backfill missing historical trade history for settled KXBTC15M markets.",
+    )
+    historical_trades_parser.add_argument("--db", required=True)
+    historical_trades_parser.add_argument("--series", default="KXBTC15M")
+    historical_trades_parser.add_argument("--workers", type=int, default=8)
+    historical_trades_parser.add_argument("--limit-markets", type=int, default=None)
+
+    recent_candles_parser = subparsers.add_parser(
+        "backfill-recent-candles",
+        help="Backfill missing 1-minute candles for recent settled KXBTC15M markets.",
+    )
+    recent_candles_parser.add_argument("--db", required=True)
+    recent_candles_parser.add_argument("--series", default="KXBTC15M")
+    recent_candles_parser.add_argument("--start-date", required=True)
+    recent_candles_parser.add_argument("--end-date", required=True)
+    recent_candles_parser.add_argument("--batch-size", type=int, default=96)
+    recent_candles_parser.add_argument("--limit-markets", type=int, default=None)
+
     analyze_parser = subparsers.add_parser("analyze", help="Render the scenario dashboard from stored Kalshi data.")
     analyze_parser.add_argument("--db", required=True)
     analyze_parser.add_argument("--scenarios", required=True)
@@ -186,6 +206,60 @@ def main() -> None:
         finally:
             connection.close()
         print(f"Backfilled recent trades for {counts['markets']} markets and {counts['trades']} trades")
+        return
+
+    if args.command == "backfill-historical-trades":
+        from .sync import backfill_missing_historical_trades
+
+        connection = connect(args.db)
+        try:
+            init_db(connection)
+            counts = backfill_missing_historical_trades(
+                connection,
+                client,
+                args.series,
+                workers=args.workers,
+                limit_markets=args.limit_markets,
+            )
+        finally:
+            connection.close()
+
+        print(
+            "Historical trade backfill complete: "
+            f"attempted={counts['attempted']}, "
+            f"markets={counts['markets']}, "
+            f"trades={counts['trades']}, "
+            f"empty={counts['empty']}, "
+            f"errors={counts['errors']}"
+        )
+        return
+
+    if args.command == "backfill-recent-candles":
+        from .sync import backfill_recent_candles
+
+        connection = connect(args.db)
+        try:
+            init_db(connection)
+            counts = backfill_recent_candles(
+                connection,
+                client,
+                args.series,
+                args.start_date,
+                args.end_date,
+                batch_size=args.batch_size,
+                limit_markets=args.limit_markets,
+            )
+        finally:
+            connection.close()
+
+        print(
+            "Recent candle backfill complete: "
+            f"requested={counts['requested_markets']}, "
+            f"markets={counts['markets']}, "
+            f"candles={counts['candles']}, "
+            f"empty={counts['empty']}, "
+            f"errors={counts['errors']}"
+        )
         return
 
     if args.command == "analyze":

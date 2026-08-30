@@ -60,6 +60,27 @@ class KalshiClient:
                 break
         return results
 
+    def get_batch_candles(
+        self,
+        market_tickers: list[str],
+        start_ts: int,
+        end_ts: int,
+        period_interval: int = 1,
+    ) -> list[dict[str, Any]]:
+        if not market_tickers:
+            return []
+
+        data = self.get_json(
+            "/markets/candlesticks",
+            {
+                "market_tickers": ",".join(market_tickers),
+                "start_ts": start_ts,
+                "end_ts": end_ts,
+                "period_interval": period_interval,
+            },
+        )
+        return data.get("markets", [])
+
     def get_historical_candles(
         self, market_ticker: str, open_time: str, close_time: str, period_interval: int = 1
     ) -> list[dict[str, Any]]:

@@ -104,10 +104,10 @@ def upsert_candles(
         yes_bid = candle.get("yes_bid", {})
         yes_ask = candle.get("yes_ask", {})
         required = (
-            _to_float(price.get("open")),
-            _to_float(price.get("close")),
-            _to_float(price.get("high")),
-            _to_float(price.get("low")),
+            _to_float(price.get("open_dollars") or price.get("open")),
+            _to_float(price.get("close_dollars") or price.get("close")),
+            _to_float(price.get("high_dollars") or price.get("high")),
+            _to_float(price.get("low_dollars") or price.get("low")),
         )
         if any(value is None for value in required):
             continue
@@ -121,18 +121,18 @@ def upsert_candles(
                 float(required[1]),
                 float(required[2]),
                 float(required[3]),
-                _to_float(price.get("mean")),
-                _to_float(price.get("previous")),
-                _to_float(yes_bid.get("open")),
-                _to_float(yes_bid.get("close")),
-                _to_float(yes_bid.get("high")),
-                _to_float(yes_bid.get("low")),
-                _to_float(yes_ask.get("open")),
-                _to_float(yes_ask.get("close")),
-                _to_float(yes_ask.get("high")),
-                _to_float(yes_ask.get("low")),
-                _to_float(candle.get("volume")),
-                _to_float(candle.get("open_interest")),
+                _to_float(price.get("mean_dollars") or price.get("mean")),
+                _to_float(price.get("previous_dollars") or price.get("previous")),
+                _to_float(yes_bid.get("open_dollars") or yes_bid.get("open")),
+                _to_float(yes_bid.get("close_dollars") or yes_bid.get("close")),
+                _to_float(yes_bid.get("high_dollars") or yes_bid.get("high")),
+                _to_float(yes_bid.get("low_dollars") or yes_bid.get("low")),
+                _to_float(yes_ask.get("open_dollars") or yes_ask.get("open")),
+                _to_float(yes_ask.get("close_dollars") or yes_ask.get("close")),
+                _to_float(yes_ask.get("high_dollars") or yes_ask.get("high")),
+                _to_float(yes_ask.get("low_dollars") or yes_ask.get("low")),
+                _to_float(candle.get("volume_fp") or candle.get("volume")),
+                _to_float(candle.get("open_interest_fp") or candle.get("open_interest")),
             )
         )
     connection.executemany(
@@ -228,6 +228,275 @@ def backfill_history(connection: sqlite3.Connection, client: KalshiClient, serie
             trade_rows += upsert_trades(connection, str(market["ticker"]), trades)
 
     return {"markets": market_rows, "candles": candle_rows, "trades": trade_rows}
+
+
+
+def backfill_missing_historical_trades(
+    connection: sqlite3.Connection,
+    client: KalshiClient,
+    series_ticker: str,
+    workers: int = 8,
+    limit_markets: int | None = None,
+) -> dict[str, int]:
+    markets = connection.execute(
+        """
+        SELECT m.ticker
+        FROM markets m
+        WHERE m.series_ticker = ?
+          AND m.result IN ('yes', 'no')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM trades t
+              WHERE t.market_ticker = m.ticker
+          )
+        ORDER BY m.open_time DESC
+        """,
+        (series_ticker,),
+    ).fetchall()
+
+    tickers = [str(row["ticker"]) for row in markets]
+
+    if limit_markets is not None:
+        tickers = tickers[:limit_markets]
+
+    attempted = 0
+    imported_markets = 0
+    empty_markets = 0
+    failed_markets = 0
+    total_trades = 0
+
+    def fetch_one(ticker: str) -> tuple[str, list[dict[str, object]]]:
+        trades = client.get_trades(ticker, historical=True)
+        return ticker, trades
+
+    print(f"Historical markets missing trades: {len(tickers)}")
+    print(f"Workers: {workers}")
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_map = {
+            executor.submit(fetch_one, ticker): ticker
+            for ticker in tickers
+        }
+
+        for future in as_completed(future_map):
+            ticker = future_map[future]
+            attempted += 1
+
+            try:
+                _, trades = future.result()
+            except Exception as exc:
+                failed_markets += 1
+                print(
+                    f"[{attempted}/{len(tickers)}] ERROR {ticker}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                continue
+
+            if not trades:
+                empty_markets += 1
+                print(
+                    f"[{attempted}/{len(tickers)}] EMPTY {ticker}"
+                )
+                continue
+
+            try:
+                inserted = upsert_trades(connection, ticker, trades)
+            except Exception as exc:
+                failed_markets += 1
+                print(
+                    f"[{attempted}/{len(tickers)}] DB ERROR {ticker}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                continue
+
+            imported_markets += 1
+            total_trades += inserted
+
+            print(
+                f"[{attempted}/{len(tickers)}] "
+                f"IMPORTED {ticker}: {inserted} trades "
+                f"| covered={imported_markets} "
+                f"| empty={empty_markets} "
+                f"| errors={failed_markets}"
+            )
+
+    return {
+        "attempted": attempted,
+        "markets": imported_markets,
+        "trades": total_trades,
+        "empty": empty_markets,
+        "errors": failed_markets,
+    }
+
+
+
+
+def backfill_recent_candles(
+    connection: sqlite3.Connection,
+    client: KalshiClient,
+    series_ticker: str,
+    start_date: str,
+    end_date: str,
+    batch_size: int = 96,
+    limit_markets: int | None = None,
+) -> dict[str, int]:
+    if batch_size < 1 or batch_size > 100:
+        raise ValueError("batch_size must be between 1 and 100")
+
+    start_dt = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+    end_dt = (
+        datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+        + timedelta(days=1)
+    )
+
+    rows = connection.execute(
+        """
+        SELECT m.ticker, m.open_time, m.close_time
+        FROM markets m
+        WHERE m.series_ticker = ?
+          AND m.result IN ('yes', 'no')
+          AND m.open_time >= ?
+          AND m.open_time < ?
+          AND NOT EXISTS (
+              SELECT 1
+              FROM candles c
+              WHERE c.market_ticker = m.ticker
+                AND c.period_interval = 1
+          )
+        ORDER BY m.open_time
+        """,
+        (
+            series_ticker,
+            start_dt.isoformat().replace("+00:00", "Z"),
+            end_dt.isoformat().replace("+00:00", "Z"),
+        ),
+    ).fetchall()
+
+    if limit_markets is not None:
+        rows = rows[:limit_markets]
+
+    total = len(rows)
+    imported_markets = 0
+    candle_rows = 0
+    empty_markets = 0
+    failed_batches = 0
+
+    print(f"Markets missing 1m candles: {total}")
+    print(f"Batch size: {batch_size}")
+
+    def import_batch(batch, label: str) -> None:
+        nonlocal imported_markets
+        nonlocal candle_rows
+        nonlocal empty_markets
+        nonlocal failed_batches
+
+        if not batch:
+            return
+
+        tickers = [str(row["ticker"]) for row in batch]
+
+        start_ts = min(
+            int(_iso_to_dt(str(row["open_time"])).timestamp())
+            for row in batch
+        )
+
+        end_ts = max(
+            int(_iso_to_dt(str(row["close_time"])).timestamp()) + 60
+            for row in batch
+        )
+
+        try:
+            groups = client.get_batch_candles(
+                tickers,
+                start_ts,
+                end_ts,
+                period_interval=1,
+            )
+        except Exception as exc:
+            # A batch can occasionally contain a ticker/time combination that
+            # the API rejects. Split recursively so one bad market does not
+            # prevent the rest of the historical backfill.
+            if len(batch) > 1:
+                midpoint = len(batch) // 2
+
+                print(
+                    f"[{label}] ERROR with {len(batch)} markets: "
+                    f"{type(exc).__name__}: {exc} -- splitting"
+                )
+
+                import_batch(batch[:midpoint], f"{label}.A")
+                import_batch(batch[midpoint:], f"{label}.B")
+                return
+
+            failed_batches += 1
+            print(
+                f"[{label}] SKIP {tickers[0]}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            return
+
+        returned = set()
+
+        for group in groups:
+            ticker = str(group.get("market_ticker") or "")
+            candles = group.get("candlesticks") or []
+
+            if not ticker or ticker not in tickers:
+                continue
+
+            returned.add(ticker)
+
+            if not candles:
+                empty_markets += 1
+                print(f"[{label}] EMPTY {ticker}")
+                continue
+
+            inserted = upsert_candles(
+                connection,
+                ticker,
+                candles,
+                1,
+                "recent_batch",
+            )
+
+            if inserted:
+                imported_markets += 1
+                candle_rows += inserted
+            else:
+                empty_markets += 1
+
+        missing = set(tickers) - returned
+
+        if missing:
+            empty_markets += len(missing)
+            for ticker in sorted(missing):
+                print(f"[{label}] NOT RETURNED {ticker}")
+
+        print(
+            f"[{label}] "
+            f"requested={len(tickers)} "
+            f"returned={len(returned)} "
+            f"covered={imported_markets}/{total} "
+            f"candles={candle_rows} "
+            f"empty={empty_markets} "
+            f"errors={failed_batches}"
+        )
+
+    batch_total = (total + batch_size - 1) // batch_size
+
+    for offset in range(0, total, batch_size):
+        batch = rows[offset : offset + batch_size]
+        batch_number = offset // batch_size + 1
+        import_batch(batch, f"batch {batch_number}/{batch_total}")
+
+    return {
+        "requested_markets": total,
+        "markets": imported_markets,
+        "candles": candle_rows,
+        "empty": empty_markets,
+        "errors": failed_batches,
+    }
+
 
 
 def sync_live(connection: sqlite3.Connection, client: KalshiClient, series_ticker: str) -> dict[str, int]:

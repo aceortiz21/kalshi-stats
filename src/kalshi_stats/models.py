@@ -42,10 +42,10 @@ class ScenarioOccurrence:
     seconds_remaining: int
     elapsed_seconds: int
     eventual_win: bool
-    best_subsequent_price: float
-    worst_subsequent_price: float
-    max_favorable_excursion: float
-    max_adverse_excursion: float
+    best_subsequent_price: float | None
+    worst_subsequent_price: float | None
+    max_favorable_excursion: float | None
+    max_adverse_excursion: float | None
     max_favorable_excursion_pct: float | None
     max_adverse_excursion_pct: float | None
     time_to_best_price: int | None
