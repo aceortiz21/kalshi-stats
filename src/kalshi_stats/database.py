@@ -145,6 +145,122 @@ CREATE TABLE IF NOT EXISTS btc_feature_snapshots (
 CREATE INDEX IF NOT EXISTS idx_btc_features_source_ts
 ON btc_feature_snapshots (source, ts);
 
+
+CREATE TABLE IF NOT EXISTS account_fills (
+    fill_id TEXT PRIMARY KEY,
+
+    trade_id TEXT,
+    order_id TEXT,
+
+    market_ticker TEXT NOT NULL,
+
+    side TEXT,
+    action TEXT,
+
+    count REAL NOT NULL,
+
+    yes_price REAL,
+    no_price REAL,
+
+    fee_cost REAL NOT NULL DEFAULT 0,
+
+    is_taker INTEGER,
+
+    created_time TEXT,
+    ts INTEGER,
+
+    subaccount_number INTEGER NOT NULL DEFAULT 0,
+
+    raw_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_fills_market_time
+ON account_fills (
+    market_ticker,
+    ts
+);
+
+
+CREATE TABLE IF NOT EXISTS account_settlements (
+    market_ticker TEXT NOT NULL,
+    settled_time TEXT NOT NULL,
+    subaccount_number INTEGER NOT NULL DEFAULT 0,
+
+    event_ticker TEXT,
+    market_result TEXT,
+
+    yes_count REAL NOT NULL DEFAULT 0,
+    yes_total_cost REAL NOT NULL DEFAULT 0,
+
+    no_count REAL NOT NULL DEFAULT 0,
+    no_total_cost REAL NOT NULL DEFAULT 0,
+
+    revenue_cents INTEGER,
+    value_cents INTEGER,
+
+    fee_cost REAL NOT NULL DEFAULT 0,
+
+    raw_json TEXT,
+
+    PRIMARY KEY (
+        market_ticker,
+        settled_time,
+        subaccount_number
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_settlements_time
+ON account_settlements (
+    settled_time
+);
+
+
+CREATE TABLE IF NOT EXISTS account_positions (
+    market_ticker TEXT NOT NULL,
+    subaccount_number INTEGER NOT NULL DEFAULT 0,
+
+    position REAL,
+    total_traded REAL,
+    market_exposure REAL,
+
+    realized_pnl REAL,
+    fees_paid REAL,
+
+    resting_orders_count INTEGER,
+
+    last_updated_ts TEXT,
+    collected_at_ms INTEGER NOT NULL,
+
+    raw_json TEXT,
+
+    PRIMARY KEY (
+        market_ticker,
+        subaccount_number
+    )
+);
+
+
+CREATE TABLE IF NOT EXISTS account_balance_snapshots (
+    collected_at_ms INTEGER NOT NULL,
+    subaccount_number INTEGER NOT NULL DEFAULT 0,
+
+    balance_cents INTEGER NOT NULL,
+    portfolio_value_cents INTEGER NOT NULL,
+
+    api_updated_ts INTEGER,
+
+    PRIMARY KEY (
+        collected_at_ms,
+        subaccount_number
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_balance_time
+ON account_balance_snapshots (
+    collected_at_ms
+);
+
+
 CREATE TABLE IF NOT EXISTS historical_market_features (
     market_ticker TEXT NOT NULL,
     observed_ts INTEGER NOT NULL,
