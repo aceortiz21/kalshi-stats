@@ -213,6 +213,29 @@ def _build_series_from_rows(
     ]
 
 
+def chronological_market_split(
+    markets: list[sqlite3.Row],
+    discovery_fraction: float = 0.80,
+) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
+    """Split markets chronologically into discovery and holdout samples.
+
+    Markets are ordered by close_time. The earlier portion is used for
+    candidate discovery; the later portion is reserved for validation.
+    """
+    if not 0.0 < discovery_fraction < 1.0:
+        raise ValueError("discovery_fraction must be between 0 and 1")
+
+    ordered = sorted(markets, key=lambda market: market["close_time"])
+
+    if len(ordered) < 2:
+        return ordered, []
+
+    split_index = int(len(ordered) * discovery_fraction)
+    split_index = max(1, min(split_index, len(ordered) - 1))
+
+    return ordered[:split_index], ordered[split_index:]
+
+
 def _settled_markets_with_data(connection: sqlite3.Connection) -> list[sqlite3.Row]:
     return connection.execute(
         """
@@ -758,6 +781,26 @@ def analyze_scenarios(
     return summaries, occurrences
 
 
+
+def _relative_target_hit(
+    current_price: float,
+    future_best: float,
+    delta: float,
+    has_subsequent_path: bool,
+) -> bool | None:
+    """Return whether a relative target was hit, or None when ineligible."""
+    if not has_subsequent_path:
+        return None
+
+    target = current_price + delta
+
+    if target > 1.0:
+        return None
+
+    return future_best >= target
+
+
+
 def build_probability_matrix(
     connection: sqlite3.Connection,
     settled_markets: list[sqlite3.Row] | None = None,
@@ -853,21 +896,17 @@ def build_probability_matrix(
                         "touch_35": future_best >= 0.35 if has_subsequent_path else None,
                         "touch_40": future_best >= 0.40 if has_subsequent_path else None,
                         "touch_50": future_best >= 0.50 if has_subsequent_path else None,
-                        "plus_5": (
-                            future_best >= min(1.0, current_price + 0.05)
-                            if has_subsequent_path else None
+                        "plus_5": _relative_target_hit(
+                            current_price, future_best, 0.05, has_subsequent_path
                         ),
-                        "plus_10": (
-                            future_best >= min(1.0, current_price + 0.10)
-                            if has_subsequent_path else None
+                        "plus_10": _relative_target_hit(
+                            current_price, future_best, 0.10, has_subsequent_path
                         ),
-                        "plus_15": (
-                            future_best >= min(1.0, current_price + 0.15)
-                            if has_subsequent_path else None
+                        "plus_15": _relative_target_hit(
+                            current_price, future_best, 0.15, has_subsequent_path
                         ),
-                        "plus_20": (
-                            future_best >= min(1.0, current_price + 0.20)
-                            if has_subsequent_path else None
+                        "plus_20": _relative_target_hit(
+                            current_price, future_best, 0.20, has_subsequent_path
                         ),
                         "best_price": future_best if has_subsequent_path else None,
                         "market_ticker": market["ticker"],
@@ -892,9 +931,13 @@ def build_probability_matrix(
                         touch_40_rate=None,
                         touch_50_rate=None,
                         plus_5c_rate=None,
+                        plus_5c_eligible_n=0,
                         plus_10c_rate=None,
+                        plus_10c_eligible_n=0,
                         plus_15c_rate=None,
+                        plus_15c_eligible_n=0,
                         plus_20c_rate=None,
+                        plus_20c_eligible_n=0,
                         avg_best_subsequent_price=None,
                         median_best_subsequent_price=None,
                     )
@@ -930,9 +973,21 @@ def build_probability_matrix(
                     touch_40_rate=path_rate("touch_40"),
                     touch_50_rate=path_rate("touch_50"),
                     plus_5c_rate=path_rate("plus_5"),
+                    plus_5c_eligible_n=sum(
+                        item["plus_5"] is not None for item in items
+                    ),
                     plus_10c_rate=path_rate("plus_10"),
+                    plus_10c_eligible_n=sum(
+                        item["plus_10"] is not None for item in items
+                    ),
                     plus_15c_rate=path_rate("plus_15"),
+                    plus_15c_eligible_n=sum(
+                        item["plus_15"] is not None for item in items
+                    ),
                     plus_20c_rate=path_rate("plus_20"),
+                    plus_20c_eligible_n=sum(
+                        item["plus_20"] is not None for item in items
+                    ),
                     avg_best_subsequent_price=mean(best_prices) if best_prices else None,
                     median_best_subsequent_price=median(best_prices) if best_prices else None,
                 )
@@ -1131,3 +1186,539 @@ def database_overview(connection: sqlite3.Connection) -> dict[str, int | str]:
         "btc_covered_markets": int(btc_covered_markets or 0),
         "last_snapshot": last_snapshot or "",
     }
+
+
+
+def build_validated_setups(
+    connection: sqlite3.Connection,
+    *,
+    settled_markets: list[sqlite3.Row] | None = None,
+    series_map: dict[str, list[Observation]] | None = None,
+    discovery_fraction: float = 0.80,
+    min_discovery_path_n: int = 500,
+    min_holdout_path_n: int = 100,
+    persistence_threshold: float = 0.02,
+    limit: int = 12,
+):
+    """Discover price/time states on early data and validate on later data.
+
+    Candidate selection uses discovery data only. Each state is compared with
+    the same price bucket at all OTHER time buckets, so the candidate does not
+    contribute to its own baseline.
+
+    Holdout data never influences candidate selection.
+    """
+    from .models import ValidatedSetup
+
+    markets = (
+        settled_markets
+        if settled_markets is not None
+        else _settled_markets_with_data(connection)
+    )
+    discovery_markets, holdout_markets = chronological_market_split(
+        markets,
+        discovery_fraction=discovery_fraction,
+    )
+
+    # Build all observation series once and reuse them in the two
+    # chronologically independent matrices.
+    full_series_map = (
+        series_map
+        if series_map is not None
+        else _build_series_map(connection, markets)
+    )
+
+    discovery_series = {
+        market["ticker"]: full_series_map[market["ticker"]]
+        for market in discovery_markets
+        if market["ticker"] in full_series_map
+    }
+    holdout_series = {
+        market["ticker"]: full_series_map[market["ticker"]]
+        for market in holdout_markets
+        if market["ticker"] in full_series_map
+    }
+
+    discovery_matrix = build_probability_matrix(
+        connection,
+        settled_markets=discovery_markets,
+        series_map=discovery_series,
+    )
+    holdout_matrix = build_probability_matrix(
+        connection,
+        settled_markets=holdout_markets,
+        series_map=holdout_series,
+    )
+
+    def leave_one_time_bucket_out_baseline(
+        matrix: list[MatrixCell],
+        target_cell: MatrixCell,
+    ) -> float | None:
+        """Weighted +10c baseline for the same price at other time buckets."""
+        comparison_cells = [
+            cell
+            for cell in matrix
+            if (
+                cell.price_bucket == target_cell.price_bucket
+                and cell.time_bucket != target_cell.time_bucket
+                and cell.plus_10c_rate is not None
+                and cell.plus_10c_eligible_n > 0
+            )
+        ]
+
+        total_n = sum(
+            cell.plus_10c_eligible_n
+            for cell in comparison_cells
+        )
+
+        if total_n == 0:
+            return None
+
+        weighted_hits = sum(
+            cell.plus_10c_rate * cell.plus_10c_eligible_n
+            for cell in comparison_cells
+        )
+
+        return weighted_hits / total_n
+
+    # Candidate selection occurs ONLY on discovery data.
+    candidates = []
+
+    for cell in discovery_matrix:
+        if (
+            cell.plus_10c_eligible_n < min_discovery_path_n
+            or cell.plus_10c_rate is None
+        ):
+            continue
+
+        # A relative +10c target must actually be possible for every entry
+        # represented by this bucket. Exclude 90c+ buckets from +10c screening.
+        try:
+            bucket_high = int(
+                cell.price_bucket
+                .replace("c", "")
+                .split("-")[1]
+            )
+        except (IndexError, ValueError):
+            continue
+
+        if bucket_high + 10 > 100:
+            continue
+
+        baseline = leave_one_time_bucket_out_baseline(
+            discovery_matrix,
+            cell,
+        )
+
+        if baseline is None:
+            continue
+
+        uplift = cell.plus_10c_rate - baseline
+
+        candidates.append(
+            (uplift, cell.plus_10c_eligible_n, cell, baseline)
+        )
+
+    candidates.sort(
+        key=lambda item: (item[0], item[1]),
+        reverse=True,
+    )
+    candidates = candidates[:limit]
+
+    holdout_map = {
+        (cell.price_bucket, cell.time_bucket): cell
+        for cell in holdout_matrix
+    }
+
+    results = []
+
+    for (
+        discovery_uplift,
+        _,
+        discovery_cell,
+        discovery_baseline,
+    ) in candidates:
+        key = (
+            discovery_cell.price_bucket,
+            discovery_cell.time_bucket,
+        )
+
+        holdout_cell = holdout_map.get(key)
+
+        if holdout_cell is None:
+            holdout_path_n = 0
+            holdout_rate = None
+            holdout_baseline = None
+            holdout_uplift = None
+            validation_status = "INSUFFICIENT"
+        else:
+            holdout_path_n = holdout_cell.plus_10c_eligible_n
+            holdout_rate = holdout_cell.plus_10c_rate
+
+            holdout_baseline = (
+                leave_one_time_bucket_out_baseline(
+                    holdout_matrix,
+                    holdout_cell,
+                )
+            )
+
+            if (
+                holdout_rate is None
+                or holdout_baseline is None
+            ):
+                holdout_uplift = None
+                validation_status = "INSUFFICIENT"
+            else:
+                holdout_uplift = (
+                    holdout_rate - holdout_baseline
+                )
+
+                if holdout_path_n < min_holdout_path_n:
+                    validation_status = "INSUFFICIENT"
+                elif holdout_uplift >= persistence_threshold:
+                    validation_status = "PERSISTED"
+                elif holdout_uplift > 0.0:
+                    validation_status = "WEAK"
+                else:
+                    validation_status = "FAILED"
+
+        results.append(
+            ValidatedSetup(
+                price_bucket=discovery_cell.price_bucket,
+                time_bucket=discovery_cell.time_bucket,
+                discovery_path_n=discovery_cell.plus_10c_eligible_n,
+                discovery_plus_10c_rate=discovery_cell.plus_10c_rate,
+                discovery_baseline_rate=discovery_baseline,
+                discovery_uplift=discovery_uplift,
+                holdout_path_n=holdout_path_n,
+                holdout_plus_10c_rate=holdout_rate,
+                holdout_baseline_rate=holdout_baseline,
+                holdout_uplift=holdout_uplift,
+                validation_status=validation_status,
+            )
+        )
+
+    return results
+
+
+def build_strategy_entries(
+    connection: sqlite3.Connection,
+    settled_markets: list[sqlite3.Row] | None = None,
+    series_map: dict[str, list[Observation]] | None = None,
+) -> tuple[list[StrategyEntry], dict[str, list[Observation]]]:
+    """Build deduplicated historical entries using matrix semantics.
+
+    Each side of each market contributes at most once to a given
+    price/time state. This intentionally matches build_probability_matrix.
+
+    The returned series_map is reused by the strategy simulator so it does
+    not need to reload historical observations from SQLite.
+    """
+
+    from .models import StrategyEntry
+
+    settled_markets = settled_markets or _settled_markets_with_data(connection)
+    series_map = series_map or _build_series_map(connection, settled_markets)
+
+    price_buckets_cents = [
+        (int(low * 100), int(high * 100), label)
+        for low, high, label in PRICE_BUCKETS
+    ]
+
+    entries: list[StrategyEntry] = []
+
+    for market in settled_markets:
+        series = series_map.get(market["ticker"])
+        if not series:
+            continue
+
+        seen_states: set[tuple[str, str, str]] = set()
+
+        for index, observation in enumerate(series):
+            for side in ("yes", "no"):
+                current_price = _side_close(observation, side)
+
+                price_label = _bucket_label(
+                    int(round(current_price * 100)),
+                    price_buckets_cents,
+                )
+
+                time_label = _bucket_label(
+                    observation.seconds_remaining,
+                    MATRIX_TIME_BUCKETS,
+                )
+
+                if price_label == "unknown" or time_label == "unknown":
+                    continue
+
+                state_key = (side, price_label, time_label)
+
+                if state_key in seen_states:
+                    continue
+
+                seen_states.add(state_key)
+
+                # A final candle has no observable post-entry path because
+                # using that candle's own high/low would introduce intrabar
+                # look-ahead.
+                if (
+                    observation.source == "candle"
+                    and index == len(series) - 1
+                ):
+                    continue
+
+                entries.append(
+                    StrategyEntry(
+                        market_ticker=market["ticker"],
+                        side=side,
+                        entry_index=index,
+                        entry_ts=observation.observed_ts,
+                        entry_price=current_price,
+                        price_bucket=price_label,
+                        time_bucket=time_label,
+                        seconds_remaining=observation.seconds_remaining,
+                        eventual_win=_eventual_win(
+                            market["result"],
+                            side,
+                        ),
+                    )
+                )
+
+    return entries, series_map
+
+def classify_validated_strategy(
+    holdout_summary,
+    *,
+    min_holdout_n: int = 100,
+) -> str:
+    """Classify an already discovery-qualified strategy on unseen holdout data."""
+
+    if holdout_summary.observations < min_holdout_n:
+        return "INSUFFICIENT"
+
+    if (
+        holdout_summary.profit_ci_low is not None
+        and holdout_summary.profit_ci_low > 0
+    ):
+        return "STRONG"
+
+    if (
+        holdout_summary.avg_profit is not None
+        and holdout_summary.avg_profit > 0
+    ):
+        return "PROMISING"
+
+    return "FAILED"
+
+
+def build_validated_strategies(
+    connection: sqlite3.Connection,
+    *,
+    discovery_fraction: float = 0.80,
+    min_discovery_n: int = 500,
+    min_holdout_n: int = 100,
+    ambiguity_mode: str = "conservative",
+    strategies=None,
+    settled_markets: list[sqlite3.Row] | None = None,
+    series_map: dict[str, list[Observation]] | None = None,
+    include_insufficient: bool = False,
+    limit: int | None = None,
+):
+    """Discover historical strategies on early data and validate on later data.
+
+    Candidate selection is discovery-only.
+
+    A candidate must have:
+        discovery observations >= min_discovery_n
+        discovery profit_ci_low > 0
+
+    Holdout classification:
+        STRONG:
+            holdout 95% CI lower bound > 0
+
+        PROMISING:
+            holdout average profit > 0, but CI includes zero
+
+        FAILED:
+            holdout average profit <= 0
+
+        INSUFFICIENT:
+            holdout observations < min_holdout_n
+
+    By default insufficient results are omitted, matching the terminal CI
+    scanner used to produce the current validated shortlist.
+
+    Historical observations and strategy entries are built only once and
+    reused across every state/strategy combination.
+    """
+    from .models import ValidatedStrategyResult
+    from .strategies import (
+        DEFAULT_EXIT_STRATEGIES,
+        simulate_strategy_entries,
+        summarize_strategy,
+    )
+
+    if ambiguity_mode not in {"conservative", "optimistic", "exclude"}:
+        raise ValueError(
+            "ambiguity_mode must be conservative, optimistic, or exclude"
+        )
+
+    strategies = (
+        list(strategies)
+        if strategies is not None
+        else list(DEFAULT_EXIT_STRATEGIES)
+    )
+
+    markets = (
+        settled_markets
+        if settled_markets is not None
+        else _settled_markets_with_data(connection)
+    )
+
+    discovery_markets, holdout_markets = chronological_market_split(
+        markets,
+        discovery_fraction=discovery_fraction,
+    )
+
+    full_series_map = (
+        series_map
+        if series_map is not None
+        else _build_series_map(connection, markets)
+    )
+
+    # Build historical entries exactly once.
+    all_entries, full_series_map = build_strategy_entries(
+        connection,
+        settled_markets=markets,
+        series_map=full_series_map,
+    )
+
+    discovery_tickers = {
+        market["ticker"]
+        for market in discovery_markets
+    }
+
+    holdout_tickers = {
+        market["ticker"]
+        for market in holdout_markets
+    }
+
+    # Group entries once so each simulation does not scan the full
+    # historical entry collection.
+    discovery_by_state = {}
+    holdout_by_state = {}
+
+    for entry in all_entries:
+        state = (entry.price_bucket, entry.time_bucket)
+
+        if entry.market_ticker in discovery_tickers:
+            discovery_by_state.setdefault(state, []).append(entry)
+
+        elif entry.market_ticker in holdout_tickers:
+            holdout_by_state.setdefault(state, []).append(entry)
+
+    price_order = {
+        label: index
+        for index, (_, _, label) in enumerate(PRICE_BUCKETS)
+    }
+
+    time_order = {
+        label: index
+        for index, (_, _, label) in enumerate(MATRIX_TIME_BUCKETS)
+    }
+
+    states = sorted(
+        discovery_by_state,
+        key=lambda state: (
+            price_order.get(state[0], 999),
+            time_order.get(state[1], 999),
+        ),
+    )
+
+    results = []
+
+    for price_bucket, time_bucket in states:
+        discovery_entries = discovery_by_state.get(
+            (price_bucket, time_bucket),
+            [],
+        )
+
+        holdout_entries = holdout_by_state.get(
+            (price_bucket, time_bucket),
+            [],
+        )
+
+        for strategy in strategies:
+            discovery_outcomes = simulate_strategy_entries(
+                strategy=strategy,
+                entries=discovery_entries,
+                series_map=full_series_map,
+                ambiguity_mode=ambiguity_mode,
+            )
+
+            discovery_summary = summarize_strategy(
+                strategy,
+                discovery_outcomes,
+            )
+
+            # IMPORTANT:
+            # Candidate selection happens ONLY on discovery.
+            if discovery_summary.observations < min_discovery_n:
+                continue
+
+            if (
+                discovery_summary.profit_ci_low is None
+                or discovery_summary.profit_ci_low <= 0
+            ):
+                continue
+
+            holdout_outcomes = simulate_strategy_entries(
+                strategy=strategy,
+                entries=holdout_entries,
+                series_map=full_series_map,
+                ambiguity_mode=ambiguity_mode,
+            )
+
+            holdout_summary = summarize_strategy(
+                strategy,
+                holdout_outcomes,
+            )
+
+            validation_status = classify_validated_strategy(
+                holdout_summary,
+                min_holdout_n=min_holdout_n,
+            )
+
+            if (
+                validation_status == "INSUFFICIENT"
+                and not include_insufficient
+            ):
+                continue
+
+            results.append(
+                ValidatedStrategyResult(
+                    price_bucket=price_bucket,
+                    time_bucket=time_bucket,
+                    strategy=strategy,
+                    discovery_summary=discovery_summary,
+                    holdout_summary=holdout_summary,
+                    validation_status=validation_status,
+                    ambiguity_mode=ambiguity_mode,
+                )
+            )
+
+    # Rank ONLY using discovery data.
+    # Holdout must never determine which strategies are selected/ranked.
+    results.sort(
+        key=lambda result: (
+            result.discovery_summary.profit_ci_low
+            if result.discovery_summary.profit_ci_low is not None
+            else float("-inf")
+        ),
+        reverse=True,
+    )
+
+    if limit is not None:
+        return results[:limit]
+
+    return results

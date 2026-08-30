@@ -103,9 +103,13 @@ class MatrixCell:
     touch_40_rate: float | None
     touch_50_rate: float | None
     plus_5c_rate: float | None
+    plus_5c_eligible_n: int
     plus_10c_rate: float | None
+    plus_10c_eligible_n: int
     plus_15c_rate: float | None
+    plus_15c_eligible_n: int
     plus_20c_rate: float | None
+    plus_20c_eligible_n: int
     avg_best_subsequent_price: float | None
     median_best_subsequent_price: float | None
 
@@ -147,3 +151,108 @@ class ActiveMarketSideView:
     avg_best_subsequent_price: float | None
     median_best_subsequent_price: float | None
     matched_scenarios: list[str]
+
+
+
+@dataclass(slots=True)
+class ValidatedSetup:
+    price_bucket: str
+    time_bucket: str
+
+    discovery_path_n: int
+    discovery_plus_10c_rate: float
+    discovery_baseline_rate: float
+    discovery_uplift: float
+
+    holdout_path_n: int
+    holdout_plus_10c_rate: float | None
+    holdout_baseline_rate: float | None
+    holdout_uplift: float | None
+
+    validation_status: str
+
+
+@dataclass(slots=True, frozen=True)
+class ExitStrategy:
+    """A mechanical historical exit rule."""
+
+    id: str
+    name: str
+    take_profit_cents: int | None = None
+    stop_loss_cents: int | None = None
+    time_exit_seconds: int | None = None
+    hold_to_settlement: bool = True
+
+
+@dataclass(slots=True)
+class StrategyOutcome:
+    """Result of applying one exit strategy to one historical entry."""
+
+    strategy_id: str
+    market_ticker: str
+    traded_side: str
+    entry_ts: int
+    entry_price: float
+
+    exit_reason: str
+    exit_price: float
+    profit: float
+    holding_seconds: int | None
+
+    take_profit_hit: bool
+    stop_loss_hit: bool
+    ambiguous: bool
+
+
+@dataclass(slots=True)
+class StrategySummary:
+    """Aggregate historical results for one exit strategy."""
+
+    strategy: ExitStrategy
+    observations: int
+    wins: int
+    losses: int
+    breakevens: int
+    ambiguous: int
+
+    win_rate: float | None
+    avg_profit: float | None
+    median_profit: float | None
+    profit_stddev: float | None
+    profit_ci_low: float | None
+    profit_ci_high: float | None
+
+    take_profit_rate: float | None
+    stop_loss_rate: float | None
+    settlement_exit_rate: float | None
+    time_exit_rate: float | None
+    ambiguous_rate: float | None
+
+
+@dataclass(slots=True)
+class StrategyEntry:
+    """One deduplicated historical price/time-state entry."""
+
+    market_ticker: str
+    side: str
+    entry_index: int
+    entry_ts: int
+    entry_price: float
+    price_bucket: str
+    time_bucket: str
+    seconds_remaining: int
+    eventual_win: bool
+
+@dataclass(slots=True)
+class ValidatedStrategyResult:
+    """Discovery/holdout validation result for one price/time strategy."""
+
+    price_bucket: str
+    time_bucket: str
+    strategy: ExitStrategy
+
+    discovery_summary: StrategySummary
+    holdout_summary: StrategySummary
+
+    validation_status: str
+    ambiguity_mode: str

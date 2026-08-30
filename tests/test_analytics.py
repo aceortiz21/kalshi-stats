@@ -255,3 +255,97 @@ class AnalyticsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ChronologicalSplitTests(unittest.TestCase):
+    def test_chronological_market_split_preserves_time_order(self):
+        from kalshi_stats.analytics import chronological_market_split
+
+        markets = [
+            {"ticker": "m3", "close_time": "2026-08-03T00:00:00Z"},
+            {"ticker": "m1", "close_time": "2026-08-01T00:00:00Z"},
+            {"ticker": "m5", "close_time": "2026-08-05T00:00:00Z"},
+            {"ticker": "m2", "close_time": "2026-08-02T00:00:00Z"},
+            {"ticker": "m4", "close_time": "2026-08-04T00:00:00Z"},
+        ]
+
+        discovery, holdout = chronological_market_split(
+            markets,
+            discovery_fraction=0.80,
+        )
+
+        self.assertEqual(
+            [market["ticker"] for market in discovery],
+            ["m1", "m2", "m3", "m4"],
+        )
+        self.assertEqual(
+            [market["ticker"] for market in holdout],
+            ["m5"],
+        )
+
+        self.assertLess(
+            discovery[-1]["close_time"],
+            holdout[0]["close_time"],
+        )
+
+    def test_relative_target_ceiling_marks_impossible_moves_ineligible(self):
+        from kalshi_stats.analytics import _relative_target_hit
+
+        # 85c entry:
+        # +5 -> 90c, +10 -> 95c, +15 -> 100c are possible.
+        # +20 -> 105c is impossible.
+        self.assertTrue(_relative_target_hit(0.85, 1.00, 0.05, True))
+        self.assertTrue(_relative_target_hit(0.85, 1.00, 0.10, True))
+        self.assertTrue(_relative_target_hit(0.85, 1.00, 0.15, True))
+        self.assertIsNone(_relative_target_hit(0.85, 1.00, 0.20, True))
+
+        # 95c entry:
+        # +5 -> 100c is possible; larger targets are impossible.
+        self.assertTrue(_relative_target_hit(0.95, 1.00, 0.05, True))
+        self.assertIsNone(_relative_target_hit(0.95, 1.00, 0.10, True))
+        self.assertIsNone(_relative_target_hit(0.95, 1.00, 0.15, True))
+        self.assertIsNone(_relative_target_hit(0.95, 1.00, 0.20, True))
+
+        # Even a mathematically possible target is ineligible without
+        # a subsequent price path.
+        self.assertIsNone(_relative_target_hit(0.50, 1.00, 0.10, False))
+
+    def test_chronological_market_split_rejects_invalid_fraction(self):
+        from kalshi_stats.analytics import chronological_market_split
+
+        with self.assertRaises(ValueError):
+            chronological_market_split([], discovery_fraction=1.0)
+
+
+def test_classify_validated_strategy_statuses():
+    from types import SimpleNamespace
+
+    from kalshi_stats.analytics import classify_validated_strategy
+
+    strong = SimpleNamespace(
+        observations=500,
+        avg_profit=0.01,
+        profit_ci_low=0.002,
+    )
+
+    promising = SimpleNamespace(
+        observations=500,
+        avg_profit=0.01,
+        profit_ci_low=-0.002,
+    )
+
+    failed = SimpleNamespace(
+        observations=500,
+        avg_profit=-0.01,
+        profit_ci_low=-0.02,
+    )
+
+    insufficient = SimpleNamespace(
+        observations=99,
+        avg_profit=0.50,
+        profit_ci_low=0.40,
+    )
+
+    assert classify_validated_strategy(strong) == "STRONG"
+    assert classify_validated_strategy(promising) == "PROMISING"
+    assert classify_validated_strategy(failed) == "FAILED"
+    assert classify_validated_strategy(insufficient) == "INSUFFICIENT"

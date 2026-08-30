@@ -4,7 +4,13 @@ import html
 from pathlib import Path
 
 from .analytics import PRICE_AFTER_SECONDS, SCENARIO_TARGETS
-from .models import ActiveMarketSideView, LiveScenarioMatch, MatrixCell, ScenarioSummary
+from .models import (
+    ActiveMarketSideView,
+    LiveScenarioMatch,
+    MatrixCell,
+    ScenarioSummary,
+    ValidatedSetup,
+)
 
 
 def _pct(value: float | None) -> str:
@@ -76,6 +82,8 @@ def render_html_report(
     matrix: list[MatrixCell],
     live_matches: list[LiveScenarioMatch],
     active_views: list[ActiveMarketSideView],
+    validated_setups: list[ValidatedSetup],
+    validated_strategies,
 ) -> None:
     scenario_rows = "\n".join(
         """
@@ -294,22 +302,8 @@ def render_html_report(
         for cell in matrix
     )
 
-    # Candidate states are deliberately selected with transparent rules.
-    # This is descriptive historical screening, not a profitability claim.
-    setup_candidates = sorted(
-        (
-            cell
-            for cell in matrix
-            if cell.path_observations >= 500
-            and cell.plus_10c_rate is not None
-        ),
-        key=lambda cell: (
-            cell.plus_10c_rate,
-            cell.plus_15c_rate or 0.0,
-            cell.path_observations,
-        ),
-        reverse=True,
-    )[:12]
+    def _pp(value: float | None) -> str:
+        return "-" if value is None else f"{value * 100:+.1f}pp"
 
     setup_rows = "\n".join(
         """
@@ -317,30 +311,145 @@ def render_html_report(
           <td>{rank}</td>
           <td><strong>{price_bucket}</strong></td>
           <td>{time_bucket}</td>
-          <td>{path_n}</td>
-          <td>{win_rate}</td>
-          <td>{plus_5}</td>
-          <td><strong>{plus_10}</strong></td>
-          <td>{plus_15}</td>
-          <td>{plus_20}</td>
-          <td>{median_best}</td>
+          <td>{discovery_n}</td>
+          <td>{discovery_rate}</td>
+          <td>{discovery_baseline}</td>
+          <td><strong>{discovery_uplift}</strong></td>
+          <td>{holdout_n}</td>
+          <td>{holdout_rate}</td>
+          <td>{holdout_baseline}</td>
+          <td><strong>{holdout_uplift}</strong></td>
+          <td><strong>{status}</strong></td>
         </tr>
         """.format(
             rank=index,
-            price_bucket=html.escape(cell.price_bucket),
-            time_bucket=html.escape(cell.time_bucket),
-            path_n=f"{cell.path_observations:,}",
-            win_rate=_pct(cell.win_rate),
-            plus_5=_pct(cell.plus_5c_rate),
-            plus_10=_pct(cell.plus_10c_rate),
-            plus_15=_pct(cell.plus_15c_rate),
-            plus_20=_pct(cell.plus_20c_rate),
-            median_best=_price(cell.median_best_subsequent_price),
+            price_bucket=html.escape(setup.price_bucket),
+            time_bucket=html.escape(setup.time_bucket),
+            discovery_n=f"{setup.discovery_path_n:,}",
+            discovery_rate=_pct(setup.discovery_plus_10c_rate),
+            discovery_baseline=_pct(setup.discovery_baseline_rate),
+            discovery_uplift=_pp(setup.discovery_uplift),
+            holdout_n=f"{setup.holdout_path_n:,}",
+            holdout_rate=_pct(setup.holdout_plus_10c_rate),
+            holdout_baseline=_pct(setup.holdout_baseline_rate),
+            holdout_uplift=_pp(setup.holdout_uplift),
+            status=html.escape(setup.validation_status),
         )
-        for index, cell in enumerate(setup_candidates, start=1)
+        for index, setup in enumerate(validated_setups, start=1)
     ) or """
         <tr>
-          <td colspan="10">No matrix states meet the current candidate requirements.</td>
+          <td colspan="12">
+            No discovery states meet the current validation requirements.
+          </td>
+        </tr>
+    """
+
+    # VALIDATED_STRATEGY_REPORT_ROWS
+    def _strategy_profit(value: float | None) -> str:
+        if value is None:
+            return "-"
+        return f"{value * 100:+.2f}¢"
+
+    def _strategy_ci(summary) -> str:
+        if (
+            summary.profit_ci_low is None
+            or summary.profit_ci_high is None
+        ):
+            return "-"
+        return (
+            f"{summary.profit_ci_low * 100:+.2f}¢ "
+            f"to {summary.profit_ci_high * 100:+.2f}¢"
+        )
+
+    def _strategy_row(result, rank: int) -> str:
+        discovery = result.discovery_summary
+        holdout = result.holdout_summary
+        status = result.validation_status
+
+        return """
+        <tr>
+          <td>{rank}</td>
+          <td><strong>{price_bucket}</strong><br>{time_bucket}</td>
+          <td>{strategy}</td>
+          <td>{discovery_n}</td>
+          <td><strong>{discovery_avg}</strong></td>
+          <td>{discovery_ci}</td>
+          <td>{holdout_n}</td>
+          <td><strong>{holdout_avg}</strong></td>
+          <td>{holdout_ci}</td>
+          <td>{ambiguity}</td>
+          <td>
+            <span class="strategy-status {status_class}">
+              {status}
+            </span>
+          </td>
+        </tr>
+        """.format(
+            rank=rank,
+            price_bucket=html.escape(result.price_bucket),
+            time_bucket=html.escape(result.time_bucket),
+            strategy=html.escape(result.strategy.name),
+            discovery_n=f"{discovery.observations:,}",
+            discovery_avg=_strategy_profit(discovery.avg_profit),
+            discovery_ci=html.escape(_strategy_ci(discovery)),
+            holdout_n=f"{holdout.observations:,}",
+            holdout_avg=_strategy_profit(holdout.avg_profit),
+            holdout_ci=html.escape(_strategy_ci(holdout)),
+            ambiguity=html.escape(
+                f"D {_pct(discovery.ambiguous_rate)} / "
+                f"H {_pct(holdout.ambiguous_rate)}"
+            ),
+            status=html.escape(status),
+            status_class=status.lower(),
+        )
+
+    strong_strategies = [
+        result
+        for result in validated_strategies
+        if result.validation_status == "STRONG"
+    ]
+
+    promising_strategies = [
+        result
+        for result in validated_strategies
+        if result.validation_status == "PROMISING"
+    ]
+
+    failed_strategies = [
+        result
+        for result in validated_strategies
+        if result.validation_status == "FAILED"
+    ]
+
+    strong_count = len(strong_strategies)
+    promising_count = len(promising_strategies)
+    failed_count = len(failed_strategies)
+
+    strong_strategy_rows = "\n".join(
+        _strategy_row(result, index)
+        for index, result in enumerate(strong_strategies, start=1)
+    ) or """
+        <tr>
+          <td colspan="11">
+            No strategies currently meet the STRONG validation threshold.
+          </td>
+        </tr>
+    """
+
+    secondary_strategies = [
+        result
+        for result in validated_strategies
+        if result.validation_status != "STRONG"
+    ]
+
+    secondary_strategy_rows = "\n".join(
+        _strategy_row(result, index)
+        for index, result in enumerate(secondary_strategies, start=1)
+    ) or """
+        <tr>
+          <td colspan="11">
+            No additional discovery-qualified strategies.
+          </td>
         </tr>
     """
 
@@ -412,6 +521,50 @@ def render_html_report(
       font-size: 1.55rem;
       color: var(--accent);
     }}
+    /* VALIDATED_STRATEGY_STYLES */
+    .strategy-summary {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin: 18px 0;
+    }}
+    .strategy-status {{
+      display: inline-block;
+      padding: 5px 9px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }}
+    .strategy-status.strong {{
+      background: var(--accent-soft);
+      color: var(--accent);
+    }}
+    .strategy-status.promising {{
+      background: #f6ead2;
+      color: #76520f;
+    }}
+    .strategy-status.failed {{
+      background: #f5ded7;
+      color: var(--warn);
+    }}
+    .strategy-note {{
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-left: 4px solid var(--accent);
+      background: rgba(13, 107, 83, 0.06);
+      border-radius: 8px;
+    }}
+    details.strategy-details {{
+      margin-top: 18px;
+    }}
+    details.strategy-details summary {{
+      cursor: pointer;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }}
+
     section {{
       padding: 20px;
       margin-top: 16px;
@@ -773,10 +926,12 @@ def render_html_report(
         </div>
 
         <div class="guide-card">
-          <h3>Setup Finder</h3>
+          <h3>Validated Setup Finder</h3>
           <p>
-            Automatically surfaces high-sample historical states. These are
-            <strong>research candidates</strong>, not validated trading signals.
+            Finds unusual price/time states in the earlier discovery sample,
+            then checks those same states against a later unseen holdout
+            sample. Compare the +10¢ rate with the same-price baseline and
+            focus on whether the uplift persists out of sample.
           </p>
         </div>
 
@@ -809,6 +964,101 @@ def render_html_report(
           not a guarantee or proof of profitability.
         </p>
       </div>
+    </section>
+
+    <!-- VALIDATED_STRATEGY_FINDER -->
+    <section class="strategy-section">
+      <div class="section-heading">
+        <div>
+          <h2>Validated Strategy Finder</h2>
+          <p>
+            Mechanical exit strategies discovered on the earlier 80% of
+            historical markets and tested against the later unseen 20%.
+            STRONG means the simulated average return's 95% confidence
+            interval remained entirely above zero in both samples.
+          </p>
+        </div>
+      </div>
+
+      <div class="strategy-summary">
+        <div class="stat">
+          <strong>{strong_count}</strong>
+          <span>STRONG</span>
+        </div>
+        <div class="stat">
+          <strong>{promising_count}</strong>
+          <span>PROMISING</span>
+        </div>
+        <div class="stat">
+          <strong>{failed_count}</strong>
+          <span>FAILED HOLDOUT</span>
+        </div>
+        <div class="stat">
+          <strong>{len(validated_strategies)}</strong>
+          <span>DISCOVERY CI-POSITIVE</span>
+        </div>
+      </div>
+
+      <h3>STRONG strategies</h3>
+      <p>
+        These are the primary out-of-sample survivors. Ranking remains based
+        on discovery data only; holdout is used only to validate the candidate.
+      </p>
+
+      <div class="table-wrap" style="margin-top: 14px;">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Price / Time State</th>
+              <th>Exit Strategy</th>
+              <th>Discovery N</th>
+              <th>Discovery Avg</th>
+              <th>Discovery 95% CI</th>
+              <th>Holdout N</th>
+              <th>Holdout Avg</th>
+              <th>Holdout 95% CI</th>
+              <th>Ambiguity</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>{strong_strategy_rows}</tbody>
+        </table>
+      </div>
+
+      <details class="strategy-details">
+        <summary>
+          Show PROMISING and FAILED discovery-qualified strategies
+        </summary>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Price / Time State</th>
+                <th>Exit Strategy</th>
+                <th>Discovery N</th>
+                <th>Discovery Avg</th>
+                <th>Discovery 95% CI</th>
+                <th>Holdout N</th>
+                <th>Holdout Avg</th>
+                <th>Holdout 95% CI</th>
+                <th>Ambiguity</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>{secondary_strategy_rows}</tbody>
+          </table>
+        </div>
+      </details>
+
+      <p class="strategy-note">
+        Historical simulation only. Positive historical average return and
+        confidence intervals do not guarantee future profitability. Current
+        results also do not yet correct the strategy search for all
+        multiple-comparison/data-mining effects, fees, or slippage.
+      </p>
     </section>
 
     <section class="live-section">
@@ -890,12 +1140,11 @@ def render_html_report(
     <section>
       <div class="section-heading">
         <div>
-          <h2>Historical Setup Finder</h2>
+          <h2>Validated Setup Finder</h2>
           <p>
-            High-sample historical price/time states ranked by subsequent
-            +10¢ reach rate. Candidates require at least 500 valid path
-            observations. These are research candidates, not validated
-            trading signals.
+            Price/time states are discovered using the earlier 80% of
+            historical markets, then tested on the later 20% that was not
+            used to select them. Ranking is based only on discovery data.
           </p>
         </div>
       </div>
@@ -907,13 +1156,15 @@ def render_html_report(
               <th>Rank</th>
               <th>Price</th>
               <th>Time Left</th>
-              <th>Path N</th>
-              <th>Win Rate</th>
-              <th>+5¢</th>
-              <th>+10¢</th>
-              <th>+15¢</th>
-              <th>+20¢</th>
-              <th>Median Max</th>
+              <th>Discovery Eligible N</th>
+              <th>Discovery +10¢</th>
+              <th>Discovery Baseline</th>
+              <th>Discovery Uplift</th>
+              <th>Holdout Eligible N</th>
+              <th>Holdout +10¢</th>
+              <th>Holdout Baseline</th>
+              <th>Holdout Uplift</th>
+              <th>Validation</th>
             </tr>
           </thead>
           <tbody>
@@ -923,10 +1174,20 @@ def render_html_report(
       </div>
 
       <div class="note">
-        Ranking is intentionally simple: +10¢ historical reach rate first,
-        then +15¢ reach rate and sample size. We will validate promising
-        states on unseen data before treating them as evidence of a
-        repeatable pattern.
+        <strong>How validation works:</strong>
+        Discovery is the earlier 80% of markets and is the only data used
+        to select and rank candidates. Holdout is the later 20% and is used
+        only afterward to test whether the pattern continued.
+        Baseline is the +10¢ reach rate for the same price bucket at all
+        other time buckets. Uplift is the candidate's +10¢ rate minus that
+        same-price baseline.
+        <strong>PERSISTED</strong> means at least 100 eligible holdout
+        observations and at least +2.0 percentage points of holdout uplift.
+        <strong>WEAK</strong> means the holdout uplift remained positive but
+        below +2.0pp. <strong>FAILED</strong> means holdout uplift was zero
+        or negative. <strong>INSUFFICIENT</strong> means there was not enough
+        eligible holdout data. These are historical validation labels, not
+        profitability guarantees.
       </div>
     </section>
 

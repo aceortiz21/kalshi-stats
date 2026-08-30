@@ -12,6 +12,7 @@ from .analytics import (
     build_active_market_side_views,
     build_live_scenario_board,
     build_probability_matrix,
+    build_validated_setups,
     database_overview,
 )
 from .btc_data import backfill_binance_1s, sync_latest_coinbase_second
@@ -115,10 +116,36 @@ def _render_dashboard(db: str, scenarios_path: str, output: str) -> None:
         series_map = _build_series_map(connection, settled_markets)
         summaries, _ = analyze_scenarios(connection, scenarios, settled_markets=settled_markets, series_map=series_map)
         matrix = build_probability_matrix(connection, settled_markets=settled_markets, series_map=series_map)
+        validated_setups = build_validated_setups(
+            connection,
+            settled_markets=settled_markets,
+            series_map=series_map,
+        )
+        from .analytics import build_validated_strategies
+
+        validated_strategies = build_validated_strategies(
+            connection,
+            settled_markets=settled_markets,
+            series_map=series_map,
+            discovery_fraction=0.80,
+            min_discovery_n=500,
+            min_holdout_n=100,
+            ambiguity_mode="conservative",
+        )
         live_matches = build_live_scenario_board(connection, scenarios, summaries)
+
         active_views = build_active_market_side_views(connection, scenarios, matrix)
         overview = database_overview(connection)
-        render_html_report(output, overview, summaries, matrix, live_matches, active_views)
+        render_html_report(
+            output,
+            overview,
+            summaries,
+            matrix,
+            live_matches,
+            active_views,
+            validated_setups,
+            validated_strategies,
+        )
     finally:
         connection.close()
 
