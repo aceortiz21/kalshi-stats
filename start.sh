@@ -104,10 +104,31 @@ echo "Starting Kalshi live dashboard..."
 echo "Press Ctrl+C to stop."
 echo
 
-PYTHONPATH=src "$PYTHON" \
-    -m kalshi_stats.cli monitor \
-    --db data/kalshi_stats_snapshot.sqlite \
-    --scenarios config/scenarios.json \
-    --output reports/dashboard.html \
-    --series KXBTC15M \
-    "$@"
+while true; do
+    set +e
+
+    PYTHONPATH=src "$PYTHON" \
+        -m kalshi_stats.cli monitor \
+        --db data/kalshi_stats_snapshot.sqlite \
+        --scenarios config/scenarios.json \
+        --output reports/dashboard.html \
+        --series KXBTC15M \
+        "$@"
+
+    EXIT_CODE=$?
+
+    set -e
+
+    if [[ "$EXIT_CODE" -eq 130 ]] \
+        || [[ "$EXIT_CODE" -eq 143 ]]
+    then
+        exit "$EXIT_CODE"
+    fi
+
+    echo
+    echo "Monitor exited unexpectedly with code $EXIT_CODE."
+    echo "Restarting in 5 seconds..."
+    echo
+
+    sleep 5
+done

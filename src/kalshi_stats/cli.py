@@ -114,6 +114,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force a fresh historical analytics rebuild.",
     )
+    monitor_parser.add_argument(
+        "--auto-rebuild-after",
+        type=int,
+        default=96,
+        help=(
+            "Automatically build a new historical model after "
+            "this many newly settled model-eligible markets. "
+            "Use 0 to disable."
+        ),
+    )
     monitor_parser.add_argument("--interval", type=float, default=1.0)
 
     serve_parser = subparsers.add_parser("serve", help="Serve the dashboard locally over HTTP.")
@@ -442,6 +452,21 @@ def main() -> None:
                 f"{history_elapsed:.2f}s"
             )
 
+            model_meta = cache.get(
+                "_model_meta",
+                {},
+            )
+
+            if model_meta:
+                print(
+                    "Model "
+                    f"v{model_meta.get('model_number')} | "
+                    f"markets="
+                    f"{model_meta.get('market_count')} | "
+                    f"STRONG="
+                    f"{model_meta.get('strong_strategies')}"
+                )
+
             # One REST sync establishes current metadata and
             # provides a fallback first frame.
             counts = sync_live(
@@ -505,6 +530,13 @@ def main() -> None:
                     cache=cache,
                     output_path=args.output,
                     series_ticker=args.series,
+                    db_path=args.db,
+                    scenarios_path=args.scenarios,
+                    cache_path=str(cache_path),
+                    auto_rebuild_after=max(
+                        0,
+                        int(args.auto_rebuild_after),
+                    ),
                 )
             )
 

@@ -568,6 +568,89 @@ def insert_ws_quote_snapshot(
 
 
 
+
+def sync_recent_market_metadata(
+    connection: sqlite3.Connection,
+    client: KalshiClient,
+    series_ticker: str,
+) -> int:
+    """Refresh recent market metadata.
+
+    This lets a restarted monitor discover contracts that opened
+    and closed while the program was not running.
+    """
+
+    markets = client.get_recent_markets(
+        series_ticker
+    )
+
+    if not markets:
+        return 0
+
+    return upsert_markets(
+        connection,
+        markets,
+        series_ticker,
+    )
+
+
+def discover_pending_finalizations(
+    connection: sqlite3.Connection,
+    series_ticker: str,
+    lookback_hours: int = 72,
+) -> list[str]:
+    """Find recent closed markets that still need settlement data."""
+
+    now = datetime.now(timezone.utc)
+
+    threshold = (
+        now - timedelta(hours=lookback_hours)
+    )
+
+    now_text = (
+        now.isoformat()
+        .replace("+00:00", "Z")
+    )
+
+    threshold_text = (
+        threshold.isoformat()
+        .replace("+00:00", "Z")
+    )
+
+    rows = connection.execute(
+        """
+        SELECT m.ticker
+        FROM markets m
+        WHERE m.series_ticker = ?
+          AND m.close_time IS NOT NULL
+          AND m.close_time < ?
+          AND m.close_time >= ?
+          AND (
+              LOWER(COALESCE(m.result, ''))
+                  NOT IN ('yes', 'no')
+              OR (
+                  SELECT COUNT(*)
+                  FROM candles c
+                  WHERE c.market_ticker = m.ticker
+                    AND c.period_interval = 1
+              ) < 14
+          )
+        ORDER BY m.close_time
+        """,
+        (
+            series_ticker,
+            now_text,
+            threshold_text,
+        ),
+    ).fetchall()
+
+    return [
+        str(row["ticker"])
+        for row in rows
+    ]
+
+
+
 def finalize_market_data(
     connection: sqlite3.Connection,
     client: KalshiClient,
@@ -735,7 +818,7 @@ def finalize_market_data(
         # We prefer the completed candle path before declaring
         # the market fully ingested. Snapshot data remains useful
         # even if trades happen to be unavailable.
-        "complete": int(total_candles) > 0,
+        "complete": int(total_candles) >= 14,
     }
 
 

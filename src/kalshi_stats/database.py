@@ -104,8 +104,29 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     path = Path(db_path)
     if path != Path(":memory:"):
         path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
+    connection = sqlite3.connect(
+        path,
+        timeout=30,
+    )
+
     connection.row_factory = sqlite3.Row
+
+    if path != Path(":memory:"):
+        # WAL is important for the always-on architecture:
+        # live WebSocket writes can continue while a separate
+        # analytics process reads the historical database.
+        connection.execute(
+            "PRAGMA journal_mode=WAL"
+        )
+
+        connection.execute(
+            "PRAGMA synchronous=NORMAL"
+        )
+
+        connection.execute(
+            "PRAGMA busy_timeout=30000"
+        )
+
     return connection
 
 
