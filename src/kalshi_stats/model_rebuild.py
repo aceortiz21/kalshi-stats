@@ -62,6 +62,22 @@ def main() -> None:
             f"{status}"
         )
 
+        history = cache.get(
+            "_model_history",
+            [],
+        )
+
+        if history:
+            latest = history[-1]
+
+            print(
+                "MODEL CHANGE | "
+                f"appeared="
+                f"{len(latest.get('appeared_strategies', []))} | "
+                f"disappeared="
+                f"{len(latest.get('disappeared_strategies', []))}"
+            )
+
     finally:
         connection.close()
 
