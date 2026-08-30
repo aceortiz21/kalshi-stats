@@ -1899,8 +1899,13 @@ def run_loop(
     )
 
     total_opportunities = 0
+    total_micro_opportunities = 0
+
     total_fills = 0
+
     total_labels = 0
+    total_micro_labels = 0
+
     last_log = 0.0
 
     try:
@@ -1915,12 +1920,24 @@ def run_loop(
                 ]
             )
 
+            total_micro_opportunities += (
+                result[
+                    "micro_opportunities"
+                ]
+            )
+
             total_fills += (
                 result["fills"]
             )
 
             total_labels += (
                 result["labels"]
+            )
+
+            total_micro_labels += (
+                result[
+                    "micro_labels"
+                ]
             )
 
             now = time.monotonic()
@@ -1931,7 +1948,13 @@ def run_loop(
                     "opportunities"
                 ]
                 or result[
+                    "micro_opportunities"
+                ]
+                or result[
                     "labels"
+                ]
+                or result[
+                    "micro_labels"
                 ]
                 or now
                 - last_log
@@ -1947,22 +1970,42 @@ def run_loop(
                     ).fetchone()[0]
                 )
 
+                micro_pending = (
+                    connection.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM micro_multiplier_opportunities
+                        WHERE label_status = 'PENDING'
+                        """
+                    ).fetchone()[0]
+                )
+
                 print(
                     "PROSPECTIVE live | "
-                    f"new_opps="
+                    f"main_opps="
                     f"{result['opportunities']} | "
-                    f"new_fills="
+                    f"micro_opps="
+                    f"{result['micro_opportunities']} | "
+                    f"fills="
                     f"{result['fills']} | "
-                    f"new_labels="
+                    f"main_labels="
                     f"{result['labels']} | "
-                    f"pending="
+                    f"micro_labels="
+                    f"{result['micro_labels']} | "
+                    f"main_pending="
                     f"{pending} | "
-                    f"session_opps="
+                    f"micro_pending="
+                    f"{micro_pending} | "
+                    f"session_main_opps="
                     f"{total_opportunities} | "
+                    f"session_micro_opps="
+                    f"{total_micro_opportunities} | "
                     f"session_fills="
                     f"{total_fills} | "
-                    f"session_labels="
-                    f"{total_labels}"
+                    f"session_main_labels="
+                    f"{total_labels} | "
+                    f"session_micro_labels="
+                    f"{total_micro_labels}"
                 )
 
                 last_log = now

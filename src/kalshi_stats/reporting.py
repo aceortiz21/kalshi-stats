@@ -137,203 +137,318 @@ def render_live_decision_cards(
         return _price(value)
 
     def strategy_panel(view) -> str:
-        matches = strong_strategy_map.get(
-            (
-                view.price_bucket,
-                view.time_bucket,
-            ),
-            [],
-        )
+        """
+        Live decision layer for the one frozen main
+        strategy.
 
-        if not matches:
-            return """
-            <div class="no-validated-setup">
-              <div class="decision-badge neutral">
-                NO VALIDATED SETUP
-              </div>
-              <strong>
-                No STRONG mechanical strategy matches this state.
-              </strong>
-              <p>
-                Use the historical state odds as context only.
-              </p>
-            </div>
-            """
+        Historical discovery tables can contain many
+        research candidates, but only the final-tested
+        60-69c / 5-10m / +25c -5c plan is promoted here.
+        """
 
-        # build_validated_strategies already ranks by DISCOVERY
-        # CI lower bound. Keep that order here; do not re-rank
-        # using holdout results.
-        result = matches[0]
-
-        strategy = result.strategy
-        holdout = result.holdout_summary
         entry = (
             view.ask_price
             if view.ask_price is not None
             else view.current_price
         )
 
+        seconds_remaining = float(
+            view.seconds_remaining
+        )
+
+        qualifies_frozen = (
+            0.60 <= float(entry) <= 0.69
+            and 300
+            <= seconds_remaining
+            <= 599
+        )
+
+        if not qualifies_frozen:
+            return """
+            <div class="no-validated-setup">
+              <div class="decision-badge neutral">
+                NO FROZEN MAIN SETUP
+              </div>
+
+              <strong>
+                Main +25/-5 rule does not qualify here.
+              </strong>
+
+              <p>
+                Main entry requires an executable ask of
+                60-69c with 5:00-9:59 remaining.
+              </p>
+            </div>
+            """
+
         tp = target_price(
             entry,
-            strategy.take_profit_cents,
+            25,
             direction=1,
         )
 
         sl = target_price(
             entry,
-            strategy.stop_loss_cents,
+            5,
             direction=-1,
-        )
-
-        if strategy.time_exit_seconds is not None:
-            if strategy.take_profit_cents is not None:
-                exit_rule = (
-                    f"TP or exit after "
-                    f"{strategy.time_exit_seconds}s"
-                )
-            else:
-                exit_rule = (
-                    f"Exit after "
-                    f"{strategy.time_exit_seconds}s"
-                )
-
-        elif (
-            strategy.hold_to_settlement
-            and strategy.take_profit_cents is not None
-            and strategy.stop_loss_cents is None
-        ):
-            exit_rule = "TP or settlement"
-
-        elif (
-            strategy.take_profit_cents is not None
-            and strategy.stop_loss_cents is not None
-        ):
-            exit_rule = "TP / SL"
-
-        else:
-            exit_rule = "Hold to settlement"
-
-        exit_candidates = [
-            ("Take profit", holdout.take_profit_rate),
-            ("Stop loss", holdout.stop_loss_rate),
-            ("Timed exit", holdout.time_exit_rate),
-            (
-                "Settlement",
-                holdout.settlement_exit_rate,
-            ),
-        ]
-
-        exit_candidates = [
-            (label, rate)
-            for label, rate in exit_candidates
-            if rate is not None
-        ]
-
-        if exit_candidates:
-            most_common_label, most_common_rate = max(
-                exit_candidates,
-                key=lambda item: item[1],
-            )
-
-            most_common_exit = (
-                f"{most_common_label} "
-                f"{_pct(most_common_rate)}"
-            )
-        else:
-            most_common_exit = "-"
-
-        extra = len(matches) - 1
-
-        extra_text = (
-            ""
-            if extra == 0
-            else (
-                f'<div class="other-setup-note">'
-                f'+{extra} other STRONG setup'
-                f'{"s" if extra != 1 else ""} '
-                f'match this state. '
-                f'See the research table below.'
-                f'</div>'
-            )
         )
 
         return """
         <div class="validated-trade-plan">
+
           <div class="decision-badge strong">
-            STRONG VALIDATED SETUP
+            FINAL HISTORICAL PASS
           </div>
 
-          <h4>{strategy_name}</h4>
+          <h4>
+            60-69c · 5-10m · TP +25c / SL -5c
+          </h4>
 
           <div class="trade-plan-grid">
+
             <div>
-              <span>Reference Entry</span>
+              <span>Reference entry</span>
               <strong>{entry}</strong>
             </div>
 
             <div>
-              <span>Take Profit</span>
+              <span>Take profit</span>
               <strong>{tp}</strong>
             </div>
 
             <div>
-              <span>Stop Loss</span>
+              <span>Stop loss</span>
               <strong>{sl}</strong>
             </div>
 
             <div>
-              <span>Exit Rule</span>
-              <strong>{exit_rule}</strong>
+              <span>Historical TP rate</span>
+              <strong>24.1%</strong>
             </div>
 
             <div>
-              <span>Historical Profitable Trades</span>
-              <strong>{win_rate}</strong>
+              <span>Historical SL rate</span>
+              <strong>75.9%</strong>
             </div>
 
             <div>
-              <span>Most Common Historical Exit</span>
-              <strong>{most_common_exit}</strong>
+              <span>Final test N</span>
+              <strong>685</strong>
             </div>
+
           </div>
 
           <div class="validation-summary">
             <strong>
-              Holdout avg {avg_profit}
+              Final locked avg +2.226c gross
             </strong>
+
             <span>
-              95% CI {ci}
-              · N={n:,}
-              · TP {tp_rate}
-              · SL {sl_rate}
+              95% CI +1.265c to +3.188c
+              · cluster CI +1.719c to +3.777c
             </span>
           </div>
 
           <p class="entry-warning">
-            TP/SL above use the live displayed price as a reference.
-            Use your actual fill price as the real entry when placing
-            the trade. Fees and slippage are not modeled.
+            Use your actual fill price for the real
+            +25c TP and -5c SL. Historical returns are
+            gross; fees, slippage and manual stop
+            execution are not included.
           </p>
 
-          {extra_text}
         </div>
         """.format(
-            strategy_name=html.escape(strategy.name),
             entry=_price(entry),
             tp=tp,
             sl=sl,
-            exit_rule=html.escape(exit_rule),
-            win_rate=_pct(holdout.win_rate),
-            most_common_exit=html.escape(
-                most_common_exit
-            ),
-            avg_profit=profit_text(holdout.avg_profit),
-            ci=html.escape(ci_text(holdout)),
-            n=holdout.observations,
-            tp_rate=_pct(holdout.take_profit_rate),
-            sl_rate=_pct(holdout.stop_loss_rate),
-            extra_text=extra_text,
         )
+
+
+    def micro_panel(view) -> str:
+        """
+        Display the live target ladder for cheap
+        contracts.
+
+        This is explicitly research-only until the
+        prospective executable-bid sample is large
+        enough to validate the historical touch results.
+        """
+
+        entry = (
+            view.ask_price
+            if view.ask_price is not None
+            else view.current_price
+        )
+
+        entry = float(
+            entry
+        )
+
+        if not (
+            0.001
+            <= entry
+            <= 0.10
+        ):
+            return ""
+
+        all_targets = [
+            .002,
+            .003,
+            .004,
+            .005,
+            .006,
+            .008,
+            .010,
+            .015,
+            .020,
+            .025,
+            .030,
+            .040,
+            .050,
+            .060,
+            .080,
+            .100,
+            .120,
+            .150,
+            .200,
+            .250,
+            .300,
+            .400,
+            .500,
+        ]
+
+        available = [
+            target
+            for target in all_targets
+            if target > entry
+        ]
+
+        # Show nearby paths plus a few large-multiplier
+        # landmarks without making the live card huge.
+        selected = (
+            available[:6]
+        )
+
+        for landmark in (
+            .10,
+            .20,
+            .50,
+        ):
+            if (
+                landmark > entry
+                and landmark
+                in available
+                and landmark
+                not in selected
+            ):
+                selected.append(
+                    landmark
+                )
+
+        cells = []
+
+        for target in selected:
+            multiplier = (
+                target
+                / entry
+            )
+
+            cells.append(
+                """
+                <div>
+                  <span>{multiplier:.1f}x target</span>
+                  <strong>{target}</strong>
+                </div>
+                """.format(
+                    multiplier=multiplier,
+                    target=_price(
+                        target
+                    ),
+                )
+            )
+
+        target_html = "\n".join(
+            cells
+        )
+
+        return """
+        <div style="
+            margin-top:14px;
+            padding:12px;
+            border:
+                1px solid rgba(127,127,127,.28);
+            border-radius:10px;
+        ">
+
+          <div style="
+              font-size:12px;
+              text-transform:uppercase;
+              letter-spacing:.07em;
+              opacity:.72;
+              margin-bottom:8px;
+          ">
+            Micro multiplier research
+          </div>
+
+          <div style="
+              display:flex;
+              justify-content:space-between;
+              gap:12px;
+              align-items:flex-start;
+              flex-wrap:wrap;
+              margin-bottom:10px;
+          ">
+            <div>
+              <span>
+                Current executable ask
+              </span>
+
+              <strong style="
+                  display:block;
+                  font-size:20px;
+              ">
+                {entry}
+              </strong>
+            </div>
+
+            <div style="
+                font-size:12px;
+                opacity:.72;
+                max-width:390px;
+            ">
+              Research question: does the executable
+              bid reach one of these targets at least
+              once before expiry?
+            </div>
+          </div>
+
+          <div style="
+              display:grid;
+              grid-template-columns:
+                  repeat(auto-fit,minmax(105px,1fr));
+              gap:8px;
+          ">
+            {targets}
+          </div>
+
+          <div style="
+              margin-top:10px;
+              font-size:12px;
+              opacity:.72;
+          ">
+            PROSPECTIVE RESEARCH · not yet a validated
+            trading signal. The logger tracks actual
+            observed executable-bid target hits.
+          </div>
+
+        </div>
+        """.format(
+            entry=_price(
+                entry
+            ),
+            targets=target_html,
+        )
+
 
     rows = []
 
@@ -426,6 +541,8 @@ def render_live_decision_cards(
               </div>
 
               {strategy_panel}
+
+              {micro_panel}
             </article>
             """.format(
                 side=html.escape(view.side.upper()),
@@ -461,6 +578,7 @@ def render_live_decision_cards(
                 plus_15=_pct(view.plus_15c_rate),
                 plus_20=_pct(view.plus_20c_rate),
                 strategy_panel=strategy_panel(view),
+                micro_panel=micro_panel(view),
             )
         )
 
