@@ -74,6 +74,7 @@ def render_html_report(
           <td>{name}</td>
           <td>{definition}</td>
           <td>{n}</td>
+          <td>{path_n}</td>
           <td>{unique_markets}</td>
           <td>{sample_badge}</td>
           <td>{win_rate}</td>
@@ -102,6 +103,7 @@ def render_html_report(
                 f"{summary.definition.description} | mode={summary.definition.occurrence_mode} | cooldown={summary.definition.cooldown_seconds}s"
             ),
             n=summary.occurrences,
+            path_n=summary.path_observations,
             unique_markets=summary.unique_markets,
             sample_badge=_sample_badge(summary),
             win_rate=_pct(summary.win_rate),
@@ -248,6 +250,7 @@ def render_html_report(
           <td>{price_bucket}</td>
           <td>{time_bucket}</td>
           <td>{observations}</td>
+          <td>{path_observations}</td>
           <td>{unique_markets}</td>
           <td>{win_rate}</td>
           <td>{avg_best}</td>
@@ -265,6 +268,7 @@ def render_html_report(
             price_bucket=html.escape(cell.price_bucket),
             time_bucket=html.escape(cell.time_bucket),
             observations=cell.observations,
+            path_observations=cell.path_observations,
             unique_markets=cell.unique_markets,
             win_rate=_pct(cell.win_rate),
             avg_best=_price(cell.avg_best_subsequent_price),
@@ -619,6 +623,7 @@ def render_html_report(
               <th>Scenario</th>
               <th>Definition</th>
               <th>N</th>
+              <th>Path N</th>
               <th>Unique Markets</th>
               <th>Reliability</th>
               <th>Win Rate</th>
@@ -657,6 +662,7 @@ def render_html_report(
               <th>Price Bucket</th>
               <th>Time Bucket</th>
               <th>N</th>
+              <th>Path N</th>
               <th>Unique Markets</th>
               <th>Win Rate</th>
               <th>Avg Max Price</th>

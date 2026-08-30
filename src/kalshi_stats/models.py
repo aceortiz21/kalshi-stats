@@ -59,6 +59,7 @@ class ScenarioOccurrence:
 class ScenarioSummary:
     definition: ScenarioDefinition
     occurrences: int
+    path_observations: int
     unique_markets: int
     win_rate: float | None
     win_rate_ci_low: float | None
@@ -93,6 +94,7 @@ class MatrixCell:
     price_bucket: str
     time_bucket: str
     observations: int
+    path_observations: int
     unique_markets: int
     win_rate: float | None
     touch_30_rate: float | None

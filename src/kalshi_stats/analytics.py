@@ -546,6 +546,7 @@ def _summarize(definition: ScenarioDefinition, occurrences: list[ScenarioOccurre
         return ScenarioSummary(
             definition=definition,
             occurrences=0,
+            path_observations=0,
             unique_markets=0,
             win_rate=None,
             win_rate_ci_low=None,
@@ -598,6 +599,10 @@ def _summarize(definition: ScenarioDefinition, occurrences: list[ScenarioOccurre
     return ScenarioSummary(
         definition=definition,
         occurrences=len(occurrences),
+        path_observations=sum(
+            item.best_subsequent_price is not None
+            for item in occurrences
+        ),
         unique_markets=len({item.market_ticker for item in occurrences}),
         win_rate=wins / len(occurrences),
         win_rate_ci_low=ci_low,
@@ -854,6 +859,7 @@ def build_probability_matrix(
                         price_bucket=price_label,
                         time_bucket=time_label,
                         observations=0,
+                        path_observations=0,
                         unique_markets=0,
                         win_rate=None,
                         touch_30_rate=None,
@@ -888,6 +894,10 @@ def build_probability_matrix(
                     price_bucket=price_label,
                     time_bucket=time_label,
                     observations=len(items),
+                    path_observations=sum(
+                        item["best_price"] is not None
+                        for item in items
+                    ),
                     unique_markets=len({str(item["market_ticker"]) for item in items}),
                     win_rate=sum(bool(item["won"]) for item in items) / len(items),
                     touch_30_rate=path_rate("touch_30"),
