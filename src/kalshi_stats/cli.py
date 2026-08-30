@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from datetime import date, datetime, timezone
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from pathlib import Path
 import time
 
 from .analytics import (
@@ -19,7 +20,10 @@ from .analytics import (
 from .btc_data import backfill_binance_1s, sync_latest_coinbase_second
 from .database import connect, init_db
 from .kalshi_api import KalshiClient
-from .reporting import render_html_report
+from .reporting import (
+    render_html_report,
+    render_live_market_fragment,
+)
 from .scenarios import load_scenarios
 from .sync import backfill_history, sync_live
 
@@ -99,7 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_parser.add_argument("--scenarios", required=True)
     monitor_parser.add_argument("--output", required=True)
     monitor_parser.add_argument("--series", default="KXBTC15M")
-    monitor_parser.add_argument("--interval", type=int, default=5)
+    monitor_parser.add_argument("--interval", type=float, default=1.0)
 
     serve_parser = subparsers.add_parser("serve", help="Serve the dashboard locally over HTTP.")
     serve_parser.add_argument("--host", default="127.0.0.1")
@@ -384,6 +388,14 @@ def main() -> None:
     if args.command == "monitor":
         connection = connect(args.db)
 
+        # Prevent an accidental zero/negative tight loop while still
+        # allowing the user to request sub-second polling.
+        interval = max(0.25, float(args.interval))
+
+        live_fragment_path = Path(args.output).with_name(
+            "live_market.html"
+        )
+
         try:
             init_db(connection)
 
@@ -395,16 +407,66 @@ def main() -> None:
                 args.scenarios,
             )
 
-            history_elapsed = time.perf_counter() - history_started
+            history_elapsed = (
+                time.perf_counter() - history_started
+            )
 
             print(
                 "Historical analytics cache ready "
                 f"in {history_elapsed:.2f}s"
             )
 
+            # Initial live sync before rendering the dashboard shell.
+            counts = sync_live(
+                connection,
+                client,
+                args.series,
+            )
+
+            live_matches = build_live_scenario_board(
+                connection,
+                cache["scenarios"],
+                cache["summaries"],
+            )
+
+            active_views = build_active_market_side_views(
+                connection,
+                cache["scenarios"],
+                cache["matrix"],
+            )
+
+            overview = database_overview(connection)
+
+            # Render the large historical dashboard ONCE.
+            render_html_report(
+                args.output,
+                overview,
+                cache["summaries"],
+                cache["matrix"],
+                live_matches,
+                active_views,
+                cache["validated_setups"],
+                cache["validated_strategies"],
+                refresh_seconds=interval,
+            )
+
+            # The browser will poll only this tiny fragment.
+            render_live_market_fragment(
+                live_fragment_path,
+                active_views,
+                cache["validated_strategies"],
+            )
+
             print(
-                "Live monitor will now reuse the historical cache "
-                f"every {args.interval}s."
+                "Dashboard shell ready. "
+                f"Kalshi polling target={interval:.2f}s. "
+                "Browser live-card polling=0.20s."
+            )
+
+            print(
+                f"Initial live sync: "
+                f"{counts['markets']} market(s), "
+                f"{counts['snapshots']} snapshot(s)"
             )
 
             while True:
@@ -416,13 +478,9 @@ def main() -> None:
                     args.series,
                 )
 
-                sync_latest_coinbase_second(connection)
-
-                live_matches = build_live_scenario_board(
-                    connection,
-                    cache["scenarios"],
-                    cache["summaries"],
-                )
+                # BTC live polling is intentionally NOT in this
+                # low-latency loop. The separate sync-btc command
+                # remains available when BTC data collection is wanted.
 
                 active_views = build_active_market_side_views(
                     connection,
@@ -430,18 +488,10 @@ def main() -> None:
                     cache["matrix"],
                 )
 
-                overview = database_overview(connection)
-
-                render_html_report(
-                    args.output,
-                    overview,
-                    cache["summaries"],
-                    cache["matrix"],
-                    live_matches,
+                render_live_market_fragment(
+                    live_fragment_path,
                     active_views,
-                    cache["validated_setups"],
                     cache["validated_strategies"],
-                    refresh_seconds=args.interval,
                 )
 
                 refresh_elapsed = (
@@ -449,13 +499,17 @@ def main() -> None:
                 )
 
                 print(
-                    f"Live refresh: "
+                    f"Live quote refresh: "
                     f"{counts['markets']} market(s), "
-                    f"{counts['snapshots']} snapshot(s), "
                     f"{refresh_elapsed:.2f}s"
                 )
 
-                time.sleep(args.interval)
+                # Maintain the requested cadence instead of sleeping
+                # the full interval AFTER the request.
+                remaining = interval - refresh_elapsed
+
+                if remaining > 0:
+                    time.sleep(remaining)
 
         finally:
             connection.close()

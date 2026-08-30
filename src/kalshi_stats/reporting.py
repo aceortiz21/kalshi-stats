@@ -75,6 +75,348 @@ def _overlaps(summary: ScenarioSummary) -> str:
     return ", ".join(f"{scenario}:{count}" for scenario, count in summary.overlap_market_counts.items())
 
 
+
+def render_live_decision_cards(
+    active_views,
+    validated_strategies,
+) -> str:
+    """Render the fast live decision layer.
+
+    Historical strategy selection remains discovery-based.
+    Holdout statistics are displayed as validation evidence,
+    not used to rank/select candidates.
+    """
+
+    strong_strategy_map = {}
+
+    for result in validated_strategies:
+        if result.validation_status != "STRONG":
+            continue
+
+        key = (
+            result.price_bucket,
+            result.time_bucket,
+        )
+
+        strong_strategy_map.setdefault(
+            key,
+            [],
+        ).append(result)
+
+    def profit_text(value: float | None) -> str:
+        if value is None:
+            return "-"
+        return f"{value * 100:+.2f}¢"
+
+    def ci_text(summary) -> str:
+        if (
+            summary.profit_ci_low is None
+            or summary.profit_ci_high is None
+        ):
+            return "-"
+
+        return (
+            f"{summary.profit_ci_low * 100:+.2f}¢ "
+            f"to {summary.profit_ci_high * 100:+.2f}¢"
+        )
+
+    def target_price(
+        entry_price: float,
+        cents: int | None,
+        *,
+        direction: int,
+    ) -> str:
+        if cents is None:
+            return "—"
+
+        value = entry_price + direction * cents / 100.0
+
+        if value < 0.0 or value > 1.0:
+            return "N/A"
+
+        return _price(value)
+
+    def strategy_panel(view) -> str:
+        matches = strong_strategy_map.get(
+            (
+                view.price_bucket,
+                view.time_bucket,
+            ),
+            [],
+        )
+
+        if not matches:
+            return """
+            <div class="no-validated-setup">
+              <div class="decision-badge neutral">
+                NO VALIDATED SETUP
+              </div>
+              <strong>
+                No STRONG mechanical strategy matches this state.
+              </strong>
+              <p>
+                Use the historical state odds as context only.
+              </p>
+            </div>
+            """
+
+        # build_validated_strategies already ranks by DISCOVERY
+        # CI lower bound. Keep that order here; do not re-rank
+        # using holdout results.
+        result = matches[0]
+
+        strategy = result.strategy
+        holdout = result.holdout_summary
+        entry = view.current_price
+
+        tp = target_price(
+            entry,
+            strategy.take_profit_cents,
+            direction=1,
+        )
+
+        sl = target_price(
+            entry,
+            strategy.stop_loss_cents,
+            direction=-1,
+        )
+
+        if strategy.time_exit_seconds is not None:
+            if strategy.take_profit_cents is not None:
+                exit_rule = (
+                    f"TP or exit after "
+                    f"{strategy.time_exit_seconds}s"
+                )
+            else:
+                exit_rule = (
+                    f"Exit after "
+                    f"{strategy.time_exit_seconds}s"
+                )
+
+        elif (
+            strategy.hold_to_settlement
+            and strategy.take_profit_cents is not None
+            and strategy.stop_loss_cents is None
+        ):
+            exit_rule = "TP or settlement"
+
+        elif (
+            strategy.take_profit_cents is not None
+            and strategy.stop_loss_cents is not None
+        ):
+            exit_rule = "TP / SL"
+
+        else:
+            exit_rule = "Hold to settlement"
+
+        extra = len(matches) - 1
+
+        extra_text = (
+            ""
+            if extra == 0
+            else (
+                f'<div class="other-setup-note">'
+                f'+{extra} other STRONG setup'
+                f'{"s" if extra != 1 else ""} '
+                f'match this state. '
+                f'See the research table below.'
+                f'</div>'
+            )
+        )
+
+        return """
+        <div class="validated-trade-plan">
+          <div class="decision-badge strong">
+            STRONG VALIDATED SETUP
+          </div>
+
+          <h4>{strategy_name}</h4>
+
+          <div class="trade-plan-grid">
+            <div>
+              <span>Reference Entry</span>
+              <strong>{entry}</strong>
+            </div>
+
+            <div>
+              <span>Take Profit</span>
+              <strong>{tp}</strong>
+            </div>
+
+            <div>
+              <span>Stop Loss</span>
+              <strong>{sl}</strong>
+            </div>
+
+            <div>
+              <span>Exit Rule</span>
+              <strong>{exit_rule}</strong>
+            </div>
+
+            <div>
+              <span>Historical Profitable Trades</span>
+              <strong>{win_rate}</strong>
+            </div>
+          </div>
+
+          <div class="validation-summary">
+            <strong>
+              Holdout avg {avg_profit}
+            </strong>
+            <span>
+              95% CI {ci}
+              · N={n:,}
+              · TP {tp_rate}
+              · SL {sl_rate}
+            </span>
+          </div>
+
+          <p class="entry-warning">
+            TP/SL above use the live displayed price as a reference.
+            Use your actual fill price as the real entry when placing
+            the trade. Fees and slippage are not modeled.
+          </p>
+
+          {extra_text}
+        </div>
+        """.format(
+            strategy_name=html.escape(strategy.name),
+            entry=_price(entry),
+            tp=tp,
+            sl=sl,
+            exit_rule=html.escape(exit_rule),
+            win_rate=_pct(holdout.win_rate),
+            avg_profit=profit_text(holdout.avg_profit),
+            ci=html.escape(ci_text(holdout)),
+            n=holdout.observations,
+            tp_rate=_pct(holdout.take_profit_rate),
+            sl_rate=_pct(holdout.stop_loss_rate),
+            extra_text=extra_text,
+        )
+
+    rows = []
+
+    for view in active_views:
+        rows.append(
+            """
+            <article class="market-card {side_class}">
+              <div class="market-card-top">
+                <div>
+                  <span class="eyebrow">
+                    {side} CONTRACT
+                  </span>
+                  <h3>{market}</h3>
+                </div>
+
+                <div class="live-price">
+                  {price}
+                </div>
+              </div>
+
+              <div class="decision-state">
+                <div>
+                  <span>Historical State</span>
+                  <strong>
+                    {price_bucket} · {time_bucket}
+                  </strong>
+                </div>
+
+                <div>
+                  <span>Time Remaining</span>
+                  <strong>{time_left}</strong>
+                </div>
+
+                <small>
+                  Historical state sample N={observations}
+                </small>
+              </div>
+
+              <div class="decision-section-title">
+                1 · Historical state odds
+              </div>
+
+              <div class="state-odds-grid">
+                <div>
+                  <span>Settles {side}</span>
+                  <strong>{settle}</strong>
+                </div>
+
+                <div>
+                  <span>Reaches +10¢</span>
+                  <strong>{plus_10}</strong>
+                </div>
+
+                <div>
+                  <span>Reaches +15¢</span>
+                  <strong>{plus_15}</strong>
+                </div>
+
+                <div>
+                  <span>Reaches +20¢</span>
+                  <strong>{plus_20}</strong>
+                </div>
+              </div>
+
+              <div class="decision-section-title">
+                2 · Trade plan
+              </div>
+
+              {strategy_panel}
+            </article>
+            """.format(
+                side=html.escape(view.side.upper()),
+                side_class=(
+                    "yes-side"
+                    if view.side.lower() == "yes"
+                    else "no-side"
+                ),
+                market=html.escape(view.market_ticker),
+                price=_price(view.current_price),
+                price_bucket=html.escape(view.price_bucket),
+                time_bucket=html.escape(view.time_bucket),
+                time_left=_clock(view.seconds_remaining),
+                observations=f"{view.observations:,}",
+                settle=_pct(view.win_rate),
+                plus_10=_pct(view.plus_10c_rate),
+                plus_15=_pct(view.plus_15c_rate),
+                plus_20=_pct(view.plus_20c_rate),
+                strategy_panel=strategy_panel(view),
+            )
+        )
+
+    if rows:
+        return "\n".join(rows)
+
+    return """
+    <div class="empty-state">
+      <strong>No active KXBTC15M market.</strong>
+      <span>
+        Waiting for the next live 15-minute contract.
+      </span>
+    </div>
+    """
+
+
+def render_live_market_fragment(
+    output_path: str | Path,
+    active_views,
+    validated_strategies,
+) -> None:
+    """Write only the lightweight live market UI fragment."""
+
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    output.write_text(
+        render_live_decision_cards(
+            active_views,
+            validated_strategies,
+        ),
+        encoding="utf-8",
+    )
+
+
+
 def render_html_report(
     output_path: str | Path,
     overview: dict[str, int | str],
@@ -182,235 +524,10 @@ def render_html_report(
         <tr><td colspan="9">No active KXBTC15M markets currently match the configured scenario triggers.</td></tr>
     """
 
-    # LIVE_STRATEGY_MATCHING
-    strong_strategy_map = {}
-
-    for result in validated_strategies:
-        if result.validation_status != "STRONG":
-            continue
-
-        key = (
-            result.price_bucket,
-            result.time_bucket,
-        )
-
-        strong_strategy_map.setdefault(
-            key,
-            [],
-        ).append(result)
-
-    def _live_profit(value: float | None) -> str:
-        if value is None:
-            return "-"
-        return f"{value * 100:+.2f}¢"
-
-    def _live_ci(summary) -> str:
-        if (
-            summary.profit_ci_low is None
-            or summary.profit_ci_high is None
-        ):
-            return "-"
-
-        return (
-            f"{summary.profit_ci_low * 100:+.2f}¢ "
-            f"to "
-            f"{summary.profit_ci_high * 100:+.2f}¢"
-        )
-
-    def _live_strategy_matches(view) -> str:
-        matches = strong_strategy_map.get(
-            (
-                view.price_bucket,
-                view.time_bucket,
-            ),
-            [],
-        )
-
-        if not matches:
-            return """
-            <div class="live-strategy-empty">
-              No STRONG historical strategy matches this state.
-            </div>
-            """
-
-        cards = []
-
-        for result in matches:
-            discovery = result.discovery_summary
-            holdout = result.holdout_summary
-
-            cards.append(
-                """
-                <div class="live-strategy-match">
-                  <div class="live-strategy-name">
-                    {strategy}
-                  </div>
-
-                  <div class="live-strategy-metrics">
-                    <div>
-                      <span>Discovery Avg Return</span>
-                      <strong>{discovery_avg}</strong>
-                      <small>
-                        Profitable exits {discovery_win_rate}
-                      </small>
-                      <small>
-                        N={discovery_n:,} · 95% CI {discovery_ci}
-                      </small>
-                    </div>
-
-                    <div>
-                      <span>Holdout Avg Return</span>
-                      <strong>{holdout_avg}</strong>
-                      <small>
-                        Profitable exits {holdout_win_rate}
-                      </small>
-                      <small>
-                        N={holdout_n:,} · 95% CI {holdout_ci}
-                      </small>
-                    </div>
-                  </div>
-
-                  <div class="live-exit-behavior">
-                    Holdout exit behavior:
-                    TP {holdout_tp_rate}
-                    · SL {holdout_sl_rate}
-                  </div>
-                </div>
-                """.format(
-                    strategy=html.escape(
-                        result.strategy.name
-                    ),
-                    discovery_avg=_live_profit(
-                        discovery.avg_profit
-                    ),
-                    discovery_win_rate=_pct(
-                        discovery.win_rate
-                    ),
-                    discovery_n=discovery.observations,
-                    discovery_ci=html.escape(
-                        _live_ci(discovery)
-                    ),
-                    holdout_avg=_live_profit(
-                        holdout.avg_profit
-                    ),
-                    holdout_win_rate=_pct(
-                        holdout.win_rate
-                    ),
-                    holdout_n=holdout.observations,
-                    holdout_ci=html.escape(
-                        _live_ci(holdout)
-                    ),
-                    holdout_tp_rate=_pct(
-                        holdout.take_profit_rate
-                    ),
-                    holdout_sl_rate=_pct(
-                        holdout.stop_loss_rate
-                    ),
-                )
-            )
-
-        count = len(matches)
-        noun = "strategy" if count == 1 else "strategies"
-
-        return """
-        <div class="live-strategy-panel">
-          <div class="live-strategy-heading">
-            <span>Validated Strategy Match</span>
-            <strong>
-              {count} STRONG {noun}
-            </strong>
-          </div>
-
-          {cards}
-        </div>
-        """.format(
-            count=count,
-            noun=noun,
-            cards="\n".join(cards),
-        )
-
-    active_cards = "\n".join(
-        """
-        <article class="market-card {side_class}">
-          <div class="market-card-top">
-            <div>
-              <span class="eyebrow">{side} CONTRACT</span>
-              <h3>{market}</h3>
-            </div>
-            <div class="live-price">{price}</div>
-          </div>
-
-          <div class="market-context">
-            <div>
-              <span>Time Remaining</span>
-              <strong>{time_left}</strong>
-            </div>
-            <div>
-              <span>Historical State</span>
-              <strong>{price_bucket} · {time_bucket}</strong>
-            </div>
-            <div>
-              <span>State Sample N</span>
-              <strong>{obs}</strong>
-            </div>
-            <div>
-              <span>Historical Settle {side}</span>
-              <strong>{win_rate}</strong>
-            </div>
-          </div>
-
-          <div class="section-label">Historical Move Probabilities</div>
-          <div class="target-grid">
-            <div><span>+5¢</span><strong>{plus_5}</strong></div>
-            <div><span>+10¢</span><strong>{plus_10}</strong></div>
-            <div><span>+15¢</span><strong>{plus_15}</strong></div>
-            <div><span>+20¢</span><strong>{plus_20}</strong></div>
-          </div>
-
-          <div class="market-footer">
-            <div>
-              <span>Median Subsequent Max</span>
-              <strong>{median_best}</strong>
-            </div>
-            <div>
-              <span>Average Subsequent Max</span>
-              <strong>{avg_best}</strong>
-            </div>
-          </div>
-
-          <div class="scenario-line">
-            <span>Matching scenarios</span>
-            <strong>{matched}</strong>
-          </div>
-
-          {strategy_matches}
-        </article>
-        """.format(
-            market=html.escape(view.market_ticker),
-            side=html.escape(view.side.upper()),
-            side_class="yes-side" if view.side.lower() == "yes" else "no-side",
-            price=_price(view.current_price),
-            time_left=_clock(view.seconds_remaining),
-            price_bucket=html.escape(view.price_bucket),
-            time_bucket=html.escape(view.time_bucket),
-            obs=f"{view.observations:,}",
-            win_rate=_pct(view.win_rate),
-            plus_5=_pct(view.plus_5c_rate),
-            plus_10=_pct(view.plus_10c_rate),
-            plus_15=_pct(view.plus_15c_rate),
-            plus_20=_pct(view.plus_20c_rate),
-            avg_best=_price(view.avg_best_subsequent_price),
-            median_best=_price(view.median_best_subsequent_price),
-            matched=html.escape(", ".join(view.matched_scenarios) or "None"),
-            strategy_matches=_live_strategy_matches(view),
-        )
-        for view in active_views
-    ) or """
-        <div class="empty-state">
-          <strong>No active KXBTC15M market in the stored snapshot.</strong>
-          <span>Run a live sync while a market is active to populate this board.</span>
-        </div>
-    """
+    active_cards = render_live_decision_cards(
+        active_views,
+        validated_strategies,
+    )
 
     matrix_rows = "\n".join(
         """
@@ -608,28 +725,49 @@ def render_html_report(
     Historical analysis uses real data already stored in the database. Scenario counting defaults to first entry per market unless a scenario explicitly opts into re-entry after cooldown. Markets with partial trade history are excluded from trade-based scenario analysis so they do not silently dilute the statistics.
     """
 
-    # LIVE_BROWSER_AUTO_REFRESH
+    # LIVE_FRAGMENT_POLLING
     if refresh_seconds is None:
         auto_refresh_script = ""
     else:
-        refresh_ms = max(
-            1000,
-            int(refresh_seconds * 1000),
-        )
+        auto_refresh_script = """
+<script>
+let lastLiveMarketHtml = null;
 
-        auto_refresh_script = (
-            "<script>\n"
-            "const scrollKey = 'kalshi-dashboard-scroll-y';\n"
-            "const savedScroll = sessionStorage.getItem(scrollKey);\n"
-            "if (savedScroll !== null) {\n"
-            "  window.scrollTo(0, Number(savedScroll));\n"
-            "}\n"
-            "window.addEventListener('beforeunload', () => {\n"
-            "  sessionStorage.setItem(scrollKey, String(window.scrollY));\n"
-            "});\n"
-            f"setTimeout(() => window.location.reload(), {refresh_ms});\n"
-            "</script>"
-        )
+async function refreshLiveMarket() {
+  try {
+    const response = await fetch(
+      "live_market.html?t=" + Date.now(),
+      { cache: "no-store" }
+    );
+
+    if (!response.ok) {
+      return;
+    }
+
+    const html = await response.text();
+
+    if (
+      html &&
+      html !== lastLiveMarketHtml
+    ) {
+      const container =
+        document.getElementById("live-market-grid");
+
+      if (container) {
+        container.innerHTML = html;
+      }
+
+      lastLiveMarketHtml = html;
+    }
+  } catch (_) {
+    // Keep the last good live view during a transient error.
+  }
+}
+
+refreshLiveMarket();
+setInterval(refreshLiveMarket, 200);
+</script>
+"""
 
     document = f"""<!doctype html>
 <html lang="en">
@@ -695,6 +833,189 @@ def render_html_report(
       font-size: 1.55rem;
       color: var(--accent);
     }}
+    /* SIMPLE_DECISION_UI */
+    .quick-steps {{
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 18px;
+    }}
+
+    .quick-steps div {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px;
+      border-radius: 12px;
+      background: white;
+      border: 1px solid var(--line);
+    }}
+
+    .quick-steps strong {{
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      flex: 0 0 28px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: white;
+    }}
+
+    .quick-steps span {{
+      font-size: 0.88rem;
+    }}
+
+    .decision-state {{
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 14px;
+    }}
+
+    .decision-state div {{
+      padding: 12px;
+      border-radius: 12px;
+      background: var(--bg);
+    }}
+
+    .decision-state span,
+    .trade-plan-grid span,
+    .state-odds-grid span {{
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 0.76rem;
+    }}
+
+    .decision-state small {{
+      grid-column: 1 / -1;
+      color: var(--muted);
+    }}
+
+    .decision-section-title {{
+      margin-top: 18px;
+      margin-bottom: 8px;
+      font-size: 0.76rem;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+    }}
+
+    .state-odds-grid {{
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+    }}
+
+    .state-odds-grid div {{
+      padding: 12px 8px;
+      text-align: center;
+      border-radius: 12px;
+      background: var(--accent-soft);
+    }}
+
+    .state-odds-grid strong {{
+      font-size: 1.2rem;
+      color: var(--accent);
+    }}
+
+    .validated-trade-plan {{
+      border: 2px solid var(--accent);
+      border-radius: 14px;
+      padding: 14px;
+      background: rgba(13, 107, 83, 0.05);
+    }}
+
+    .validated-trade-plan h4 {{
+      margin: 9px 0 12px;
+      font-size: 1.15rem;
+    }}
+
+    .decision-badge {{
+      display: inline-block;
+      padding: 5px 9px;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: bold;
+      letter-spacing: 0.05em;
+    }}
+
+    .decision-badge.strong {{
+      background: var(--accent);
+      color: white;
+    }}
+
+    .decision-badge.neutral {{
+      background: #ece6de;
+      color: var(--muted);
+    }}
+
+    .trade-plan-grid {{
+      display: grid;
+      grid-template-columns:
+        repeat(auto-fit, minmax(125px, 1fr));
+      gap: 8px;
+    }}
+
+    .trade-plan-grid div {{
+      padding: 10px;
+      border-radius: 10px;
+      background: white;
+    }}
+
+    .trade-plan-grid strong {{
+      font-size: 1.05rem;
+    }}
+
+    .validation-summary {{
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 10px;
+      background: white;
+    }}
+
+    .validation-summary strong,
+    .validation-summary span {{
+      display: block;
+    }}
+
+    .validation-summary span {{
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }}
+
+    .entry-warning,
+    .other-setup-note {{
+      margin-top: 9px;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }}
+
+    .no-validated-setup {{
+      padding: 14px;
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+      background: #faf8f4;
+    }}
+
+    .no-validated-setup strong {{
+      display: block;
+      margin: 9px 0 5px;
+    }}
+
+    @media (max-width: 760px) {{
+      .quick-steps {{
+        grid-template-columns: 1fr;
+      }}
+
+      .state-odds-grid {{
+        grid-template-columns: repeat(2, 1fr);
+      }}
+    }}
+
     /* LIVE_STRATEGY_MATCH_STYLES */
     .live-strategy-panel {{
       margin-top: 16px;
@@ -1065,12 +1386,32 @@ def render_html_report(
 <body>
   <main>
     <div class="hero">
-      <h1>BTC 15-Min Historical Edge Dashboard</h1>
+      <h1>BTC 15-Min Decision Dashboard</h1>
       <p>
-        Live KXBTC15M market states compared against thousands of historical
-        observations. Built for research, context, and probability—not automated
-        trade recommendations.
+        Use the live YES/NO cards below to see the current historical
+        state, the observed outcome rates, and whether a validated
+        mechanical setup matches.
       </p>
+
+      <div class="quick-steps">
+        <div>
+          <strong>1</strong>
+          <span>Choose the YES or NO side you are evaluating.</span>
+        </div>
+
+        <div>
+          <strong>2</strong>
+          <span>Read the historical settle and price-move rates.</span>
+        </div>
+
+        <div>
+          <strong>3</strong>
+          <span>
+            Only follow a mechanical plan when a
+            STRONG VALIDATED SETUP is shown.
+          </span>
+        </div>
+      </div>
       <div class="stats">
         <div class="stat"><span>Total Markets</span><strong>{overview["market_count"]}</strong></div>
         <div class="stat"><span>Settled Markets</span><strong>{overview["settled_market_count"]}</strong></div>
@@ -1082,6 +1423,26 @@ def render_html_report(
         <div class="stat"><span>Last Live Sync</span><strong>{html.escape(str(overview["last_snapshot"] or "-"))}</strong></div>
       </div>
     </div>
+    <section class="live-section">
+      <div class="section-heading">
+        <div>
+          <h2>Current Market</h2>
+          <p>
+            Current YES and NO prices mapped to the exact historical
+            price/time state. Settlement odds and price-move probabilities
+            describe what happened historically from comparable states;
+            validated strategy matches appear directly on each side.
+          </p>
+        </div>
+      </div>
+
+      <div
+        class="live-grid"
+        id="live-market-grid"
+      >
+        {active_cards}
+      </div>
+    </section>
     <section>
       <h2>Data Coverage / Health</h2>
       <p>Interpret any percentage in the rest of the dashboard through these coverage counts first.</p>
@@ -1218,23 +1579,6 @@ def render_html_report(
       </div>
     </section>
 
-    <section class="live-section">
-      <div class="section-heading">
-        <div>
-          <h2>Current Market</h2>
-          <p>
-            Current YES and NO prices mapped to the exact historical
-            price/time state. Settlement odds and price-move probabilities
-            describe what happened historically from comparable states;
-            validated strategy matches appear directly on each side.
-          </p>
-        </div>
-      </div>
-
-      <div class="live-grid">
-        {active_cards}
-      </div>
-    </section>
     <!-- VALIDATED_STRATEGY_FINDER -->
     <section class="strategy-section">
       <div class="section-heading">
