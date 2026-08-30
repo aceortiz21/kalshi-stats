@@ -263,3 +263,46 @@ class ValidatedStrategyResult:
 
     validation_status: str
     ambiguity_mode: str
+
+
+
+@dataclass(slots=True)
+class WalkForwardFoldResult:
+    """One strictly future walk-forward test window."""
+
+    fold_index: int
+
+    train_market_count: int
+    test_market_count: int
+
+    train_end: str
+    test_start: str
+    test_end: str
+
+    train_summary: StrategySummary
+    test_summary: StrategySummary
+
+    test_status: str
+
+
+@dataclass(slots=True)
+class WalkForwardStrategyResult:
+    """Persistence of one strategy across repeated unseen windows."""
+
+    price_bucket: str
+    time_bucket: str
+    strategy: ExitStrategy
+
+    folds: list[WalkForwardFoldResult]
+
+    total_folds: int
+    qualified_folds: int
+    evaluated_folds: int
+    positive_folds: int
+    strong_folds: int
+
+    aggregate_oos_summary: StrategySummary
+    worst_fold_avg_profit: float | None
+
+    persistence_status: str
+    ambiguity_mode: str

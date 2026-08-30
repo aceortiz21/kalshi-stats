@@ -349,3 +349,162 @@ def test_classify_validated_strategy_statuses():
     assert classify_validated_strategy(promising) == "PROMISING"
     assert classify_validated_strategy(failed) == "FAILED"
     assert classify_validated_strategy(insufficient) == "INSUFFICIENT"
+
+
+
+def test_expanding_walk_forward_splits_are_future_and_nonoverlapping():
+    from kalshi_stats.analytics import (
+        expanding_walk_forward_splits,
+    )
+
+    markets = [
+        {
+            "ticker": f"M{i}",
+            "close_time": (
+                f"2026-01-{i + 1:02d}T00:00:00Z"
+            ),
+        }
+        for i in range(10)
+    ]
+
+    splits = expanding_walk_forward_splits(
+        markets,
+        fold_count=5,
+        initial_train_fraction=0.50,
+    )
+
+    assert len(splits) == 5
+
+    seen_test = set()
+
+    for train, test in splits:
+        train_tickers = {
+            market["ticker"]
+            for market in train
+        }
+
+        test_tickers = {
+            market["ticker"]
+            for market in test
+        }
+
+        assert train_tickers.isdisjoint(
+            test_tickers
+        )
+
+        assert seen_test.isdisjoint(
+            test_tickers
+        )
+
+        assert (
+            train[-1]["close_time"]
+            < test[0]["close_time"]
+        )
+
+        seen_test.update(
+            test_tickers
+        )
+
+    assert seen_test == {
+        "M5",
+        "M6",
+        "M7",
+        "M8",
+        "M9",
+    }
+
+
+def test_walk_forward_persistence_classification():
+    from types import SimpleNamespace
+
+    from kalshi_stats.analytics import (
+        classify_walk_forward_persistence,
+    )
+
+    robust = SimpleNamespace(
+        observations=500,
+        avg_profit=0.01,
+        profit_ci_low=0.002,
+    )
+
+    mixed = SimpleNamespace(
+        observations=500,
+        avg_profit=0.01,
+        profit_ci_low=-0.002,
+    )
+
+    failed = SimpleNamespace(
+        observations=500,
+        avg_profit=-0.01,
+        profit_ci_low=-0.02,
+    )
+
+    assert (
+        classify_walk_forward_persistence(
+            total_folds=5,
+            qualified_folds=5,
+            evaluated_folds=5,
+            positive_folds=4,
+            aggregate_summary=robust,
+        )
+        == "ROBUST"
+    )
+
+    assert (
+        classify_walk_forward_persistence(
+            total_folds=5,
+            qualified_folds=5,
+            evaluated_folds=5,
+            positive_folds=3,
+            aggregate_summary=mixed,
+        )
+        == "MIXED"
+    )
+
+    assert (
+        classify_walk_forward_persistence(
+            total_folds=5,
+            qualified_folds=5,
+            evaluated_folds=5,
+            positive_folds=2,
+            aggregate_summary=failed,
+        )
+        == "UNSTABLE"
+    )
+
+    assert (
+        classify_walk_forward_persistence(
+            total_folds=5,
+            qualified_folds=2,
+            evaluated_folds=2,
+            positive_folds=2,
+            aggregate_summary=robust,
+        )
+        == "INSUFFICIENT"
+    )
+
+
+
+def test_walk_forward_requires_repeated_qualification_for_robust():
+    from types import SimpleNamespace
+
+    from kalshi_stats.analytics import (
+        classify_walk_forward_persistence,
+    )
+
+    summary = SimpleNamespace(
+        observations=500,
+        avg_profit=0.02,
+        profit_ci_low=0.01,
+    )
+
+    assert (
+        classify_walk_forward_persistence(
+            total_folds=5,
+            qualified_folds=3,
+            evaluated_folds=3,
+            positive_folds=3,
+            aggregate_summary=summary,
+        )
+        == "MIXED"
+    )

@@ -1521,6 +1521,7 @@ def build_validated_strategies(
     strategies=None,
     settled_markets: list[sqlite3.Row] | None = None,
     series_map: dict[str, list[Observation]] | None = None,
+    strategy_entries=None,
     include_insufficient: bool = False,
     limit: int | None = None,
 ):
@@ -1586,12 +1587,16 @@ def build_validated_strategies(
         else _build_series_map(connection, markets)
     )
 
-    # Build historical entries exactly once.
-    all_entries, full_series_map = build_strategy_entries(
-        connection,
-        settled_markets=markets,
-        series_map=full_series_map,
-    )
+    # Build historical entries exactly once unless the
+    # caller already constructed them for another validation pass.
+    if strategy_entries is None:
+        all_entries, full_series_map = build_strategy_entries(
+            connection,
+            settled_markets=markets,
+            series_map=full_series_map,
+        )
+    else:
+        all_entries = list(strategy_entries)
 
     discovery_tickers = {
         market["ticker"]
@@ -1720,5 +1725,675 @@ def build_validated_strategies(
 
     if limit is not None:
         return results[:limit]
+
+    return results
+
+
+
+def expanding_walk_forward_splits(
+    markets,
+    *,
+    fold_count: int = 5,
+    initial_train_fraction: float = 0.50,
+):
+    """
+    Expanding-window chronological splits with non-overlapping
+    future test windows.
+
+    With five folds and a 50% initial training period:
+
+        F1 train 0-50%   test 50-60%
+        F2 train 0-60%   test 60-70%
+        F3 train 0-70%   test 70-80%
+        F4 train 0-80%   test 80-90%
+        F5 train 0-90%   test 90-100%
+
+    Every test market is therefore unseen when its fold's
+    strategy qualification occurs.
+    """
+
+    if fold_count < 2:
+        raise ValueError(
+            "fold_count must be at least 2"
+        )
+
+    if not (
+        0 < initial_train_fraction < 1
+    ):
+        raise ValueError(
+            "initial_train_fraction must be between 0 and 1"
+        )
+
+    ordered = sorted(
+        markets,
+        key=lambda market: (
+            str(
+                market["close_time"]
+                or ""
+            ),
+            str(
+                market["ticker"]
+            ),
+        ),
+    )
+
+    market_count = len(ordered)
+
+    if market_count < 3:
+        return []
+
+    initial_train_count = max(
+        1,
+        int(
+            market_count
+            * initial_train_fraction
+        ),
+    )
+
+    remaining = (
+        market_count
+        - initial_train_count
+    )
+
+    if remaining <= 0:
+        return []
+
+    actual_fold_count = min(
+        fold_count,
+        remaining,
+    )
+
+    base_test_size = (
+        remaining
+        // actual_fold_count
+    )
+
+    remainder = (
+        remaining
+        % actual_fold_count
+    )
+
+    cursor = initial_train_count
+    splits = []
+
+    for index in range(
+        actual_fold_count
+    ):
+        test_size = (
+            base_test_size
+            + (
+                1
+                if index < remainder
+                else 0
+            )
+        )
+
+        test_end = (
+            cursor + test_size
+        )
+
+        train = ordered[:cursor]
+        test = ordered[
+            cursor:test_end
+        ]
+
+        if not test:
+            break
+
+        splits.append(
+            (
+                train,
+                test,
+            )
+        )
+
+        cursor = test_end
+
+    return splits
+
+
+def classify_walk_forward_persistence(
+    *,
+    total_folds: int,
+    qualified_folds: int,
+    evaluated_folds: int,
+    positive_folds: int,
+    aggregate_summary,
+    min_evaluated_folds: int = 3,
+) -> str:
+    """
+    Persistence classification independent of the existing
+    80/20 STRONG/PROMISING/FAILED classification.
+
+    ROBUST:
+        >=3 adequately-sized unseen folds,
+        >=80% positive unseen folds,
+        aggregate unseen 95% CI entirely above zero.
+
+    MIXED:
+        >=3 adequately-sized unseen folds,
+        >=60% positive unseen folds,
+        aggregate unseen average above zero.
+
+    UNSTABLE:
+        enough folds exist but the above conditions fail.
+    """
+
+    if (
+        evaluated_folds
+        < min_evaluated_folds
+    ):
+        return "INSUFFICIENT"
+
+    if (
+        aggregate_summary.observations
+        <= 0
+        or aggregate_summary.avg_profit
+        is None
+    ):
+        return "INSUFFICIENT"
+
+    positive_rate = (
+        positive_folds
+        / evaluated_folds
+    )
+
+    qualification_rate = (
+        qualified_folds
+        / total_folds
+        if total_folds
+        else 0.0
+    )
+
+    if (
+        aggregate_summary.profit_ci_low
+        is not None
+        and aggregate_summary.profit_ci_low
+        > 0
+        and positive_rate >= 0.80
+        and qualification_rate >= 0.80
+    ):
+        return "ROBUST"
+
+    if (
+        aggregate_summary.avg_profit
+        > 0
+        and positive_rate >= 0.60
+    ):
+        return "MIXED"
+
+    return "UNSTABLE"
+
+
+def build_walk_forward_strategies(
+    connection: sqlite3.Connection,
+    *,
+    fold_count: int = 5,
+    initial_train_fraction: float = 0.50,
+    min_train_n: int = 500,
+    min_test_n: int = 50,
+    ambiguity_mode: str = "conservative",
+    strategies=None,
+    settled_markets: list[sqlite3.Row] | None = None,
+    series_map: dict[str, list[Observation]] | None = None,
+    strategy_entries=None,
+):
+    """
+    Re-discover strategies using only information available before
+    each test period, then evaluate them in the immediately following
+    unseen market window.
+
+    Test windows never overlap. A strategy contributes out-of-sample
+    results for a fold only if it independently qualified using that
+    fold's training data.
+    """
+
+    from .models import (
+        WalkForwardFoldResult,
+        WalkForwardStrategyResult,
+    )
+
+    from .strategies import (
+        DEFAULT_EXIT_STRATEGIES,
+        simulate_strategy_entries,
+        summarize_strategy,
+    )
+
+    if ambiguity_mode not in {
+        "conservative",
+        "optimistic",
+        "exclude",
+    }:
+        raise ValueError(
+            "ambiguity_mode must be conservative, "
+            "optimistic, or exclude"
+        )
+
+    strategies = (
+        list(strategies)
+        if strategies is not None
+        else list(
+            DEFAULT_EXIT_STRATEGIES
+        )
+    )
+
+    markets = (
+        settled_markets
+        if settled_markets is not None
+        else _settled_markets_with_data(
+            connection
+        )
+    )
+
+    full_series_map = (
+        series_map
+        if series_map is not None
+        else _build_series_map(
+            connection,
+            markets,
+        )
+    )
+
+    if strategy_entries is None:
+        all_entries, full_series_map = (
+            build_strategy_entries(
+                connection,
+                settled_markets=markets,
+                series_map=full_series_map,
+            )
+        )
+    else:
+        all_entries = list(
+            strategy_entries
+        )
+
+    splits = (
+        expanding_walk_forward_splits(
+            markets,
+            fold_count=fold_count,
+            initial_train_fraction=(
+                initial_train_fraction
+            ),
+        )
+    )
+
+    fold_records = {}
+    aggregate_outcomes = {}
+    strategy_lookup = {}
+
+    total_folds = len(splits)
+
+    for fold_offset, (
+        train_markets,
+        test_markets,
+    ) in enumerate(
+        splits,
+        start=1,
+    ):
+        train_tickers = {
+            market["ticker"]
+            for market in train_markets
+        }
+
+        test_tickers = {
+            market["ticker"]
+            for market in test_markets
+        }
+
+        train_by_state = {}
+        test_by_state = {}
+
+        for entry in all_entries:
+            state = (
+                entry.price_bucket,
+                entry.time_bucket,
+            )
+
+            if (
+                entry.market_ticker
+                in train_tickers
+            ):
+                train_by_state.setdefault(
+                    state,
+                    [],
+                ).append(entry)
+
+            elif (
+                entry.market_ticker
+                in test_tickers
+            ):
+                test_by_state.setdefault(
+                    state,
+                    [],
+                ).append(entry)
+
+        train_end = str(
+            train_markets[-1][
+                "close_time"
+            ]
+            or ""
+        )
+
+        test_start = str(
+            test_markets[0][
+                "close_time"
+            ]
+            or ""
+        )
+
+        test_end = str(
+            test_markets[-1][
+                "close_time"
+            ]
+            or ""
+        )
+
+        for (
+            price_bucket,
+            time_bucket,
+        ), train_entries in (
+            train_by_state.items()
+        ):
+            test_entries = (
+                test_by_state.get(
+                    (
+                        price_bucket,
+                        time_bucket,
+                    ),
+                    [],
+                )
+            )
+
+            for strategy in strategies:
+                train_outcomes = (
+                    simulate_strategy_entries(
+                        strategy=strategy,
+                        entries=train_entries,
+                        series_map=(
+                            full_series_map
+                        ),
+                        ambiguity_mode=(
+                            ambiguity_mode
+                        ),
+                    )
+                )
+
+                train_summary = (
+                    summarize_strategy(
+                        strategy,
+                        train_outcomes,
+                    )
+                )
+
+                # Fold candidate selection is entirely historical:
+                # the future test window cannot influence this.
+                if (
+                    train_summary.observations
+                    < min_train_n
+                ):
+                    continue
+
+                if (
+                    train_summary.profit_ci_low
+                    is None
+                    or
+                    train_summary.profit_ci_low
+                    <= 0
+                ):
+                    continue
+
+                test_outcomes = (
+                    simulate_strategy_entries(
+                        strategy=strategy,
+                        entries=test_entries,
+                        series_map=(
+                            full_series_map
+                        ),
+                        ambiguity_mode=(
+                            ambiguity_mode
+                        ),
+                    )
+                )
+
+                test_summary = (
+                    summarize_strategy(
+                        strategy,
+                        test_outcomes,
+                    )
+                )
+
+                test_status = (
+                    classify_validated_strategy(
+                        test_summary,
+                        min_holdout_n=(
+                            min_test_n
+                        ),
+                    )
+                )
+
+                strategy_id = str(
+                    strategy.id
+                )
+
+                key = (
+                    price_bucket,
+                    time_bucket,
+                    strategy_id,
+                )
+
+                strategy_lookup[
+                    key
+                ] = strategy
+
+                fold_records.setdefault(
+                    key,
+                    [],
+                ).append(
+                    WalkForwardFoldResult(
+                        fold_index=(
+                            fold_offset
+                        ),
+                        train_market_count=(
+                            len(
+                                train_markets
+                            )
+                        ),
+                        test_market_count=(
+                            len(
+                                test_markets
+                            )
+                        ),
+                        train_end=(
+                            train_end
+                        ),
+                        test_start=(
+                            test_start
+                        ),
+                        test_end=(
+                            test_end
+                        ),
+                        train_summary=(
+                            train_summary
+                        ),
+                        test_summary=(
+                            test_summary
+                        ),
+                        test_status=(
+                            test_status
+                        ),
+                    )
+                )
+
+                aggregate_outcomes.setdefault(
+                    key,
+                    [],
+                ).extend(
+                    test_outcomes
+                )
+
+    results = []
+
+    for key, folds in (
+        fold_records.items()
+    ):
+        (
+            price_bucket,
+            time_bucket,
+            _strategy_id,
+        ) = key
+
+        strategy = (
+            strategy_lookup[key]
+        )
+
+        aggregate_summary = (
+            summarize_strategy(
+                strategy,
+                aggregate_outcomes.get(
+                    key,
+                    [],
+                ),
+            )
+        )
+
+        evaluated = [
+            fold
+            for fold in folds
+            if (
+                fold.test_summary
+                .observations
+                >= min_test_n
+            )
+        ]
+
+        positive_folds = sum(
+            1
+            for fold in evaluated
+            if (
+                fold.test_summary.avg_profit
+                is not None
+                and
+                fold.test_summary.avg_profit
+                > 0
+            )
+        )
+
+        strong_folds = sum(
+            1
+            for fold in evaluated
+            if (
+                fold.test_status
+                == "STRONG"
+            )
+        )
+
+        fold_averages = [
+            fold.test_summary.avg_profit
+            for fold in evaluated
+            if (
+                fold.test_summary.avg_profit
+                is not None
+            )
+        ]
+
+        worst_fold_avg_profit = (
+            min(fold_averages)
+            if fold_averages
+            else None
+        )
+
+        persistence_status = (
+            classify_walk_forward_persistence(
+                total_folds=(
+                    total_folds
+                ),
+                qualified_folds=(
+                    len(folds)
+                ),
+                evaluated_folds=(
+                    len(evaluated)
+                ),
+                positive_folds=(
+                    positive_folds
+                ),
+                aggregate_summary=(
+                    aggregate_summary
+                ),
+            )
+        )
+
+        results.append(
+            WalkForwardStrategyResult(
+                price_bucket=(
+                    price_bucket
+                ),
+                time_bucket=(
+                    time_bucket
+                ),
+                strategy=strategy,
+                folds=sorted(
+                    folds,
+                    key=lambda fold: (
+                        fold.fold_index
+                    ),
+                ),
+                total_folds=(
+                    total_folds
+                ),
+                qualified_folds=(
+                    len(folds)
+                ),
+                evaluated_folds=(
+                    len(evaluated)
+                ),
+                positive_folds=(
+                    positive_folds
+                ),
+                strong_folds=(
+                    strong_folds
+                ),
+                aggregate_oos_summary=(
+                    aggregate_summary
+                ),
+                worst_fold_avg_profit=(
+                    worst_fold_avg_profit
+                ),
+                persistence_status=(
+                    persistence_status
+                ),
+                ambiguity_mode=(
+                    ambiguity_mode
+                ),
+            )
+        )
+
+    # This ranking is for analysis/display only.
+    # It does NOT alter discovery candidate selection.
+    status_order = {
+        "ROBUST": 3,
+        "MIXED": 2,
+        "UNSTABLE": 1,
+        "INSUFFICIENT": 0,
+    }
+
+    results.sort(
+        key=lambda result: (
+            status_order.get(
+                result.persistence_status,
+                -1,
+            ),
+            (
+                result.aggregate_oos_summary
+                .profit_ci_low
+                if (
+                    result.aggregate_oos_summary
+                    .profit_ci_low
+                    is not None
+                )
+                else float("-inf")
+            ),
+        ),
+        reverse=True,
+    )
 
     return results
