@@ -65,3 +65,286 @@ def test_qualifying_side_uses_executable_ask():
     ) == [
         "yes"
     ]
+
+
+def _insert_feature(
+    connection,
+    *,
+    ts,
+    yes_bid,
+    yes_ask,
+):
+    connection.execute(
+        """
+        INSERT INTO market_feature_snapshots (
+            market_ticker,
+            ts,
+
+            btc_ts,
+            btc_age_ms,
+
+            threshold,
+            threshold_rule,
+
+            spot,
+
+            threshold_distance_dollars,
+            threshold_distance_pct,
+            threshold_distance_bps,
+
+            seconds_remaining,
+
+            yes_bid,
+            yes_ask,
+            no_bid,
+            no_ask
+        )
+        VALUES (
+            'TEST',
+            ?,
+
+            ?,
+            0,
+
+            100000,
+            'greater_or_equal',
+
+            100000,
+
+            0,
+            0,
+            0,
+
+            400,
+
+            ?,
+            ?,
+            ?,
+            ?
+        )
+        """,
+        (
+            ts,
+            ts,
+
+            yes_bid,
+            yes_ask,
+
+            1.0 - yes_ask,
+            1.0 - yes_bid,
+        ),
+    )
+
+
+def _insert_opportunity(
+    connection,
+    *,
+    ts=1_000_000,
+):
+    connection.execute(
+        """
+        INSERT INTO prospective_opportunities (
+            strategy_id,
+            market_ticker,
+            side,
+
+            detected_at_ms,
+            market_feature_ts,
+
+            entry_bid,
+            entry_ask,
+            seconds_remaining,
+
+            threshold,
+            spot
+        )
+        VALUES (
+            'TEST_STRATEGY',
+            'TEST',
+            'yes',
+
+            ?,
+            ?,
+
+            .64,
+            .65,
+            400,
+
+            100000,
+            100000
+        )
+        """,
+        (
+            ts,
+            ts,
+        ),
+    )
+
+
+def test_outcome_labeler_uses_future_executable_bid():
+    from kalshi_stats.database import (
+        connect,
+        init_db,
+    )
+
+    from kalshi_stats.prospective_logger import (
+        label_pending_opportunities,
+    )
+
+    connection = connect(
+        ":memory:"
+    )
+
+    try:
+        init_db(
+            connection
+        )
+
+        connection.execute(
+            """
+            INSERT INTO markets (
+                ticker,
+                series_ticker
+            )
+            VALUES (
+                'TEST',
+                'KXBTC15M'
+            )
+            """
+        )
+
+        _insert_opportunity(
+            connection
+        )
+
+        _insert_feature(
+            connection,
+            ts=1_001_000,
+            yes_bid=.70,
+            yes_ask=.71,
+        )
+
+        _insert_feature(
+            connection,
+            ts=1_002_000,
+            yes_bid=.80,
+            yes_ask=.81,
+        )
+
+        count = (
+            label_pending_opportunities(
+                connection
+            )
+        )
+
+        assert count == 1
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM prospective_opportunities
+            """
+        ).fetchone()
+
+        assert (
+            row["label_status"]
+            == "LABELED"
+        )
+
+        assert (
+            row["first_hit"]
+            == "TP"
+        )
+
+        assert (
+            row["tp_hit"]
+            == 1
+        )
+
+        assert round(
+            row[
+                "gross_profit_per_contract"
+            ],
+            4,
+        ) == .15
+
+    finally:
+        connection.close()
+
+
+def test_outcome_labeler_rejects_path_gap_before_hit():
+    from kalshi_stats.database import (
+        connect,
+        init_db,
+    )
+
+    from kalshi_stats.prospective_logger import (
+        label_pending_opportunities,
+    )
+
+    connection = connect(
+        ":memory:"
+    )
+
+    try:
+        init_db(
+            connection
+        )
+
+        connection.execute(
+            """
+            INSERT INTO markets (
+                ticker,
+                series_ticker,
+                result,
+                close_time
+            )
+            VALUES (
+                'TEST',
+                'KXBTC15M',
+                'yes',
+                '1970-01-01T00:16:47Z'
+            )
+            """
+        )
+
+        _insert_opportunity(
+            connection
+        )
+
+        # Seven-second hole before an apparent TP.
+        # We cannot know whether SL happened first.
+        _insert_feature(
+            connection,
+            ts=1_007_000,
+            yes_bid=.80,
+            yes_ask=.81,
+        )
+
+        count = (
+            label_pending_opportunities(
+                connection
+            )
+        )
+
+        assert count == 1
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM prospective_opportunities
+            """
+        ).fetchone()
+
+        assert (
+            row["label_status"]
+            == "INCOMPLETE"
+        )
+
+        assert (
+            row["first_hit"]
+            is None
+        )
+
+    finally:
+        connection.close()

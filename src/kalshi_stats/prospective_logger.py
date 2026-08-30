@@ -966,6 +966,364 @@ def record_fill_snapshots(
     return saved
 
 
+
+MAX_PATH_GAP_MS = 5000
+
+
+def future_market_path(
+    connection,
+    *,
+    ticker,
+    after_ts,
+):
+    return connection.execute(
+        """
+        SELECT
+            ts,
+            yes_bid,
+            no_bid
+
+        FROM market_feature_snapshots
+
+        WHERE market_ticker = ?
+          AND ts > ?
+
+        ORDER BY ts
+        """,
+        (
+            ticker,
+            int(after_ts),
+        ),
+    ).fetchall()
+
+
+def market_result_state(
+    connection,
+    *,
+    ticker,
+):
+    return connection.execute(
+        """
+        SELECT
+            result,
+            close_time
+
+        FROM markets
+
+        WHERE ticker = ?
+        """,
+        (
+            ticker,
+        ),
+    ).fetchone()
+
+
+def label_one_opportunity(
+    connection,
+    opportunity,
+):
+    """
+    Label a prospective TP +15c / SL -5c setup.
+
+    Entry uses the executable ask captured when the
+    opportunity appeared.
+
+    Exit testing uses future executable bids.
+
+    If the recorded quote path contains a gap larger
+    than MAX_PATH_GAP_MS before the outcome is known,
+    the observation is marked INCOMPLETE rather than
+    guessing what happened during the missing period.
+    """
+
+    ticker = str(
+        opportunity[
+            "market_ticker"
+        ]
+    )
+
+    side = str(
+        opportunity[
+            "side"
+        ]
+    ).lower()
+
+    if side not in {
+        "yes",
+        "no",
+    }:
+        raise ValueError(
+            f"Unknown opportunity side: {side}"
+        )
+
+    entry_price = float(
+        opportunity[
+            "entry_ask"
+        ]
+    )
+
+    tp_price = (
+        entry_price
+        + 0.15
+    )
+
+    sl_price = (
+        entry_price
+        - 0.05
+    )
+
+    path = future_market_path(
+        connection,
+        ticker=ticker,
+        after_ts=(
+            opportunity[
+                "market_feature_ts"
+            ]
+        ),
+    )
+
+    previous_ts = int(
+        opportunity[
+            "market_feature_ts"
+        ]
+    )
+
+    path_broken = False
+
+    for row in path:
+        row_ts = int(
+            row["ts"]
+        )
+
+        gap_ms = (
+            row_ts
+            - previous_ts
+        )
+
+        if gap_ms > MAX_PATH_GAP_MS:
+            path_broken = True
+            break
+
+        previous_ts = row_ts
+
+        bid = float(
+            row[
+                f"{side}_bid"
+            ]
+        )
+
+        if bid >= tp_price:
+            connection.execute(
+                """
+                UPDATE prospective_opportunities
+
+                SET
+                    label_status = 'LABELED',
+                    tp_hit = 1,
+                    sl_hit = 0,
+                    first_hit = 'TP',
+                    exit_ts_ms = ?,
+                    exit_bid = ?,
+                    gross_profit_per_contract = ?
+
+                WHERE opportunity_id = ?
+                """,
+                (
+                    row_ts,
+                    bid,
+                    bid
+                    - entry_price,
+                    opportunity[
+                        "opportunity_id"
+                    ],
+                ),
+            )
+
+            return "TP"
+
+        if bid <= sl_price:
+            connection.execute(
+                """
+                UPDATE prospective_opportunities
+
+                SET
+                    label_status = 'LABELED',
+                    tp_hit = 0,
+                    sl_hit = 1,
+                    first_hit = 'SL',
+                    exit_ts_ms = ?,
+                    exit_bid = ?,
+                    gross_profit_per_contract = ?
+
+                WHERE opportunity_id = ?
+                """,
+                (
+                    row_ts,
+                    bid,
+                    bid
+                    - entry_price,
+                    opportunity[
+                        "opportunity_id"
+                    ],
+                ),
+            )
+
+            return "SL"
+
+    state = market_result_state(
+        connection,
+        ticker=ticker,
+    )
+
+    if state is None:
+        return None
+
+    result = str(
+        state["result"]
+        or ""
+    ).lower()
+
+    if result not in {
+        "yes",
+        "no",
+    }:
+        return None
+
+    close_ms = iso_to_ms(
+        state[
+            "close_time"
+        ]
+    )
+
+    # If the path was interrupted before we could
+    # establish the first TP/SL touch, do not use the
+    # observation as training evidence.
+    if path_broken:
+        connection.execute(
+            """
+            UPDATE prospective_opportunities
+
+            SET
+                label_status = 'INCOMPLETE',
+                settlement_result = ?
+
+            WHERE opportunity_id = ?
+            """,
+            (
+                result,
+                opportunity[
+                    "opportunity_id"
+                ],
+            ),
+        )
+
+        return "INCOMPLETE"
+
+    # A no-hit settlement is only trustworthy if the
+    # quote stream remained alive through the end of
+    # the contract.
+    if (
+        close_ms is None
+        or not path
+        or abs(
+            close_ms
+            - int(
+                path[-1]["ts"]
+            )
+        )
+        > MAX_PATH_GAP_MS
+    ):
+        connection.execute(
+            """
+            UPDATE prospective_opportunities
+
+            SET
+                label_status = 'INCOMPLETE',
+                settlement_result = ?
+
+            WHERE opportunity_id = ?
+            """,
+            (
+                result,
+                opportunity[
+                    "opportunity_id"
+                ],
+            ),
+        )
+
+        return "INCOMPLETE"
+
+    settlement_price = (
+        1.0
+        if result == side
+        else 0.0
+    )
+
+    connection.execute(
+        """
+        UPDATE prospective_opportunities
+
+        SET
+            label_status = 'LABELED',
+            tp_hit = 0,
+            sl_hit = 0,
+            first_hit = 'SETTLEMENT',
+            exit_ts_ms = ?,
+            exit_bid = ?,
+            gross_profit_per_contract = ?,
+            settlement_result = ?
+
+        WHERE opportunity_id = ?
+        """,
+        (
+            close_ms,
+            settlement_price,
+            settlement_price
+            - entry_price,
+            result,
+            opportunity[
+                "opportunity_id"
+            ],
+        ),
+    )
+
+    return "SETTLEMENT"
+
+
+def label_pending_opportunities(
+    connection,
+):
+    pending = connection.execute(
+        """
+        SELECT *
+        FROM prospective_opportunities
+        WHERE label_status = 'PENDING'
+        ORDER BY detected_at_ms
+        """
+    ).fetchall()
+
+    labeled = 0
+
+    for opportunity in pending:
+        result = label_one_opportunity(
+            connection,
+            opportunity,
+        )
+
+        if result is not None:
+            labeled += 1
+
+            print(
+                "OUTCOME | "
+                f"{opportunity['market_ticker']} | "
+                f"{opportunity['side'].upper()} | "
+                f"{result}"
+            )
+
+    return labeled
+
+
+
 def run_once(
     connection,
     *,
@@ -992,6 +1350,12 @@ def run_once(
         now_ms=now_ms,
     )
 
+    labels = (
+        label_pending_opportunities(
+            connection
+        )
+    )
+
     connection.commit()
 
     return {
@@ -999,6 +1363,7 @@ def run_once(
             opportunities
         ),
         "fills": fills,
+        "labels": labels,
     }
 
 
@@ -1016,6 +1381,7 @@ def run_loop(
 
     total_opportunities = 0
     total_fills = 0
+    total_labels = 0
     last_log = 0.0
 
     try:
@@ -1034,12 +1400,19 @@ def run_loop(
                 result["fills"]
             )
 
+            total_labels += (
+                result["labels"]
+            )
+
             now = time.monotonic()
 
             if (
                 result["fills"]
                 or result[
                     "opportunities"
+                ]
+                or result[
+                    "labels"
                 ]
                 or now
                 - last_log
@@ -1061,12 +1434,16 @@ def run_loop(
                     f"{result['opportunities']} | "
                     f"new_fills="
                     f"{result['fills']} | "
+                    f"new_labels="
+                    f"{result['labels']} | "
                     f"pending="
                     f"{pending} | "
                     f"session_opps="
                     f"{total_opportunities} | "
                     f"session_fills="
-                    f"{total_fills}"
+                    f"{total_fills} | "
+                    f"session_labels="
+                    f"{total_labels}"
                 )
 
                 last_log = now
