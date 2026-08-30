@@ -337,17 +337,22 @@ def _build_series_map(
     return series_map
 
 
-def _price_at_or_after(future: list[Observation], side: str, offset_seconds: int) -> float | None:
-    if not future:
+def _price_at_or_after(
+    future: list[Observation],
+    side: str,
+    offset_seconds: int,
+    *,
+    entry_ts: int,
+    entry_remaining: int,
+) -> float | None:
+    if not future or entry_remaining < offset_seconds:
         return None
-    entry_ts = future[0].observed_ts
-    entry_remaining = future[0].seconds_remaining
-    if entry_remaining < offset_seconds:
-        return None
+
     for observation in future:
         if observation.observed_ts - entry_ts >= offset_seconds:
             return _side_close(observation, side)
-    return _side_close(future[-1], side) if future[-1].observed_ts - entry_ts >= offset_seconds else None
+
+    return None
 
 
 def _match_trigger(definition: ScenarioDefinition, observation: Observation, trigger_side: str) -> tuple[bool, float]:
@@ -449,7 +454,13 @@ def _build_occurrence(
         max_adverse_excursion_pct = None
 
     price_after_seconds = {
-        offset: _price_at_or_after(future, traded_side, offset)
+        offset: _price_at_or_after(
+            future,
+            traded_side,
+            offset,
+            entry_ts=entry_observation.observed_ts,
+            entry_remaining=entry_observation.seconds_remaining,
+        )
         for offset in PRICE_AFTER_SECONDS
     }
 

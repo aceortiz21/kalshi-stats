@@ -19,7 +19,7 @@ def _seconds(value: float | None) -> str:
     return "-" if value is None else f"{value:.0f}s"
 
 def _clock(seconds: int | float) -> str:
-    seconds = max (0, int(seconds))
+    seconds = max(0, int(seconds))
     minutes, seconds = divmod(seconds, 60)
     return f"{minutes}:{seconds:02d}"
 
@@ -162,7 +162,7 @@ def render_html_report(
         <tr><td colspan="9">No active KXBTC15M markets currently match the configured scenario triggers.</td></tr>
     """
 
-        active_cards = "\n".join(
+    active_cards = "\n".join(
         """
         <article class="market-card {side_class}">
           <div class="market-card-top">
@@ -353,6 +353,172 @@ def render_html_report(
       padding: 20px;
       margin-top: 16px;
     }}
+    .section-heading {{
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }}
+
+    .section-heading p {{
+      max-width: 760px;
+    }}
+
+    .live-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+    }}
+
+    .market-card {{
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: white;
+    }}
+
+    .market-card.yes-side {{
+      border-top: 4px solid var(--accent);
+    }}
+
+    .market-card.no-side {{
+      border-top: 4px solid var(--warn);
+    }}
+
+    .market-card-top {{
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      gap: 16px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }}
+
+    .market-card h3 {{
+      margin: 4px 0 0;
+      font-size: 1.05rem;
+      overflow-wrap: anywhere;
+    }}
+
+    .eyebrow,
+    .section-label {{
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 0.72rem;
+      font-weight: bold;
+      color: var(--muted);
+    }}
+
+    .live-price {{
+      font-size: 2.5rem;
+      line-height: 1;
+      font-weight: bold;
+      color: var(--accent);
+    }}
+
+    .no-side .live-price {{
+      color: var(--warn);
+    }}
+
+    .market-context,
+    .market-footer {{
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-top: 16px;
+    }}
+
+    .market-context div,
+    .market-footer div {{
+      padding: 12px;
+      background: var(--bg);
+      border-radius: 12px;
+    }}
+
+    .market-context span,
+    .market-footer span,
+    .scenario-line span {{
+      display: block;
+      font-size: 0.76rem;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }}
+
+    .market-context strong,
+    .market-footer strong {{
+      font-size: 1.05rem;
+    }}
+
+    .section-label {{
+      margin-top: 20px;
+      margin-bottom: 8px;
+    }}
+
+    .target-grid {{
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+    }}
+
+    .target-grid div {{
+      padding: 14px 8px;
+      text-align: center;
+      border-radius: 12px;
+      background: var(--accent-soft);
+    }}
+
+    .target-grid span {{
+      display: block;
+      font-size: 0.76rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }}
+
+    .target-grid strong {{
+      font-size: 1.25rem;
+      color: var(--accent);
+    }}
+
+    .scenario-line {{
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }}
+
+    .empty-state {{
+      padding: 28px;
+      border: 1px dashed var(--line);
+      border-radius: 14px;
+      text-align: center;
+      background: white;
+    }}
+
+    .empty-state strong,
+    .empty-state span {{
+      display: block;
+    }}
+
+    .empty-state span {{
+      margin-top: 6px;
+      color: var(--muted);
+    }}
+
+    @media (max-width: 650px) {{
+      .live-grid {{
+        grid-template-columns: 1fr;
+      }}
+
+      .target-grid {{
+        grid-template-columns: repeat(2, 1fr);
+      }}
+
+      .market-context {{
+        grid-template-columns: 1fr 1fr;
+      }}
+    }}
+
     .table-wrap {{
       overflow-x: auto;
       margin-top: 12px;
@@ -385,8 +551,12 @@ def render_html_report(
 <body>
   <main>
     <div class="hero">
-      <h1>Kalshi BTC 15m Statistics Manager</h1>
-      <p>Historical behavior companion for KXBTC15M. The emphasis is sample size, post-trigger path behavior, and price/time context, not automated recommendations.</p>
+      <h1>BTC 15-Min Historical Edge Dashboard</h1>
+      <p>
+        Live KXBTC15M market states compared against thousands of historical
+        observations. Built for research, context, and probability—not automated
+        trade recommendations.
+      </p>
       <div class="stats">
         <div class="stat"><span>Total Markets</span><strong>{overview["market_count"]}</strong></div>
         <div class="stat"><span>Settled Markets</span><strong>{overview["settled_market_count"]}</strong></div>
@@ -402,36 +572,19 @@ def render_html_report(
       <h2>Data Coverage / Health</h2>
       <p>Interpret any percentage in the rest of the dashboard through these coverage counts first.</p>
     </section>
-    <section>
-      <h2>Active Market Board</h2>
-      <p>Every current YES/NO side is mapped to the historical price/time matrix so you can compare a live contract against prior behavior quickly.</p>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Market</th>
-              <th>Side</th>
-              <th>Current Price</th>
-              <th>Time Left</th>
-              <th>Price Bucket</th>
-              <th>Time Bucket</th>
-              <th>N</th>
-              <th>Win Rate</th>
-              <th>Reach +5c</th>
-              <th>Reach +10c</th>
-              <th>Reach +15c</th>
-              <th>Reach +20c</th>
-              <th>Touch 30c</th>
-              <th>Touch 35c</th>
-              <th>Touch 40c</th>
-              <th>Touch 50c</th>
-              <th>Avg Max Price</th>
-              <th>Median Max Price</th>
-              <th>Named Scenarios</th>
-            </tr>
-          </thead>
-          <tbody>{active_rows}</tbody>
-        </table>
+    <section class="live-section">
+      <div class="section-heading">
+        <div>
+          <h2>Current Market</h2>
+          <p>
+            Live YES and NO prices mapped directly to historically comparable
+            price and time states.
+          </p>
+        </div>
+      </div>
+
+      <div class="live-grid">
+        {active_cards}
       </div>
     </section>
     <section>
