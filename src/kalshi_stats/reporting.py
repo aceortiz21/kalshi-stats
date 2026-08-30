@@ -167,7 +167,11 @@ def render_live_decision_cards(
 
         strategy = result.strategy
         holdout = result.holdout_summary
-        entry = view.current_price
+        entry = (
+            view.ask_price
+            if view.ask_price is not None
+            else view.current_price
+        )
 
         tp = target_price(
             entry,
@@ -208,6 +212,35 @@ def render_live_decision_cards(
 
         else:
             exit_rule = "Hold to settlement"
+
+        exit_candidates = [
+            ("Take profit", holdout.take_profit_rate),
+            ("Stop loss", holdout.stop_loss_rate),
+            ("Timed exit", holdout.time_exit_rate),
+            (
+                "Settlement",
+                holdout.settlement_exit_rate,
+            ),
+        ]
+
+        exit_candidates = [
+            (label, rate)
+            for label, rate in exit_candidates
+            if rate is not None
+        ]
+
+        if exit_candidates:
+            most_common_label, most_common_rate = max(
+                exit_candidates,
+                key=lambda item: item[1],
+            )
+
+            most_common_exit = (
+                f"{most_common_label} "
+                f"{_pct(most_common_rate)}"
+            )
+        else:
+            most_common_exit = "-"
 
         extra = len(matches) - 1
 
@@ -257,6 +290,11 @@ def render_live_decision_cards(
               <span>Historical Profitable Trades</span>
               <strong>{win_rate}</strong>
             </div>
+
+            <div>
+              <span>Most Common Historical Exit</span>
+              <strong>{most_common_exit}</strong>
+            </div>
           </div>
 
           <div class="validation-summary">
@@ -286,6 +324,9 @@ def render_live_decision_cards(
             sl=sl,
             exit_rule=html.escape(exit_rule),
             win_rate=_pct(holdout.win_rate),
+            most_common_exit=html.escape(
+                most_common_exit
+            ),
             avg_profit=profit_text(holdout.avg_profit),
             ci=html.escape(ci_text(holdout)),
             n=holdout.observations,
@@ -308,8 +349,26 @@ def render_live_decision_cards(
                   <h3>{market}</h3>
                 </div>
 
-                <div class="live-price">
-                  {price}
+                <div class="live-price-block">
+                  <span class="buy-label">
+                    BUY {side}
+                  </span>
+
+                  <div class="live-price">
+                    {buy_price}
+                  </div>
+
+                  <small>
+                    Bid {bid_price}
+                    · Mid {mid_price}
+                  </small>
+
+                  <small
+                    class="quote-age"
+                    data-quote-ts-ms="{quote_ts_ms}"
+                  >
+                    WEBSOCKET LIVE
+                  </small>
                 </div>
               </div>
 
@@ -323,7 +382,12 @@ def render_live_decision_cards(
 
                 <div>
                   <span>Time Remaining</span>
-                  <strong>{time_left}</strong>
+                  <strong
+                    class="live-countdown"
+                    data-close-ts="{close_ts}"
+                  >
+                    {time_left}
+                  </strong>
                 </div>
 
                 <small>
@@ -371,7 +435,23 @@ def render_live_decision_cards(
                     else "no-side"
                 ),
                 market=html.escape(view.market_ticker),
-                price=_price(view.current_price),
+                buy_price=_price(
+                    view.ask_price
+                    if view.ask_price is not None
+                    else view.current_price
+                ),
+                bid_price=_price(view.bid_price),
+                mid_price=_price(view.current_price),
+                quote_ts_ms=(
+                    view.quote_ts_ms
+                    if view.quote_ts_ms is not None
+                    else 0
+                ),
+                close_ts=(
+                    view.close_ts
+                    if view.close_ts is not None
+                    else 0
+                ),
                 price_bucket=html.escape(view.price_bucket),
                 time_bucket=html.escape(view.time_bucket),
                 time_left=_clock(view.seconds_remaining),
@@ -407,13 +487,21 @@ def render_live_market_fragment(
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    output.write_text(
-        render_live_decision_cards(
-            active_views,
-            validated_strategies,
-        ),
+    rendered = render_live_decision_cards(
+        active_views,
+        validated_strategies,
+    )
+
+    temporary = output.with_name(
+        output.name + ".tmp"
+    )
+
+    temporary.write_text(
+        rendered,
         encoding="utf-8",
     )
+
+    temporary.replace(output)
 
 
 
@@ -765,7 +853,61 @@ async function refreshLiveMarket() {
 }
 
 refreshLiveMarket();
-setInterval(refreshLiveMarket, 200);
+setInterval(refreshLiveMarket, 100);
+
+function updateFastLiveFields() {
+  const nowMs = Date.now();
+
+  document
+    .querySelectorAll(".live-countdown[data-close-ts]")
+    .forEach((element) => {
+      const closeTs =
+        Number(element.dataset.closeTs) * 1000;
+
+      const remainingMs = Math.max(
+        0,
+        closeTs - nowMs
+      );
+
+      const totalSeconds =
+        Math.floor(remainingMs / 1000);
+
+      const minutes =
+        Math.floor(totalSeconds / 60);
+
+      const seconds =
+        totalSeconds % 60;
+
+      element.textContent =
+        minutes + ":" +
+        String(seconds).padStart(2, "0");
+    });
+
+  document
+    .querySelectorAll(".quote-age[data-quote-ts-ms]")
+    .forEach((element) => {
+      const quoteTs =
+        Number(element.dataset.quoteTsMs);
+
+      if (!quoteTs) {
+        element.textContent = "LIVE";
+        return;
+      }
+
+      const ageSeconds = Math.max(
+        0,
+        (nowMs - quoteTs) / 1000
+      );
+
+      element.textContent =
+        "WEBSOCKET LIVE · " +
+        ageSeconds.toFixed(1) +
+        "s old";
+    });
+}
+
+updateFastLiveFields();
+setInterval(updateFastLiveFields, 100);
 </script>
 """
 
@@ -864,6 +1006,32 @@ setInterval(refreshLiveMarket, 200);
 
     .quick-steps span {{
       font-size: 0.88rem;
+    }}
+
+    /* WEBSOCKET_LIVE_PRICE */
+    .live-price-block {{
+      text-align: right;
+    }}
+
+    .buy-label {{
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: bold;
+      letter-spacing: 0.06em;
+    }}
+
+    .live-price-block small {{
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+    }}
+
+    .quote-age {{
+      font-size: 0.72rem;
+      font-weight: bold;
+      color: var(--accent) !important;
     }}
 
     .decision-state {{

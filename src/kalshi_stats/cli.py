@@ -386,11 +386,13 @@ def main() -> None:
         return
 
     if args.command == "monitor":
-        connection = connect(args.db)
+        import asyncio
 
-        # Prevent an accidental zero/negative tight loop while still
-        # allowing the user to request sub-second polling.
-        interval = max(0.25, float(args.interval))
+        from .live_monitor import (
+            run_websocket_live_loop,
+        )
+
+        connection = connect(args.db)
 
         live_fragment_path = Path(args.output).with_name(
             "live_market.html"
@@ -399,7 +401,10 @@ def main() -> None:
         try:
             init_db(connection)
 
-            print("Building historical analytics cache...")
+            print(
+                "Building historical analytics cache..."
+            )
+
             history_started = time.perf_counter()
 
             cache = _build_historical_dashboard_cache(
@@ -416,7 +421,8 @@ def main() -> None:
                 f"in {history_elapsed:.2f}s"
             )
 
-            # Initial live sync before rendering the dashboard shell.
+            # One REST sync establishes current metadata and
+            # provides a fallback first frame.
             counts = sync_live(
                 connection,
                 client,
@@ -437,7 +443,7 @@ def main() -> None:
 
             overview = database_overview(connection)
 
-            # Render the large historical dashboard ONCE.
+            # Historical/research HTML is generated once.
             render_html_report(
                 args.output,
                 overview,
@@ -447,10 +453,9 @@ def main() -> None:
                 active_views,
                 cache["validated_setups"],
                 cache["validated_strategies"],
-                refresh_seconds=interval,
+                refresh_seconds=0.1,
             )
 
-            # The browser will poll only this tiny fragment.
             render_live_market_fragment(
                 live_fragment_path,
                 active_views,
@@ -458,61 +463,34 @@ def main() -> None:
             )
 
             print(
-                "Dashboard shell ready. "
-                f"Kalshi polling target={interval:.2f}s. "
-                "Browser live-card polling=0.20s."
+                "Dashboard shell ready."
             )
 
             print(
-                f"Initial live sync: "
+                "Initial REST sync: "
                 f"{counts['markets']} market(s), "
                 f"{counts['snapshots']} snapshot(s)"
             )
 
-            while True:
-                refresh_started = time.perf_counter()
+            print(
+                "Starting event-driven Kalshi "
+                "WebSocket pricing..."
+            )
 
-                counts = sync_live(
-                    connection,
-                    client,
-                    args.series,
+            asyncio.run(
+                run_websocket_live_loop(
+                    connection=connection,
+                    client=client,
+                    cache=cache,
+                    output_path=args.output,
+                    series_ticker=args.series,
                 )
-
-                # BTC live polling is intentionally NOT in this
-                # low-latency loop. The separate sync-btc command
-                # remains available when BTC data collection is wanted.
-
-                active_views = build_active_market_side_views(
-                    connection,
-                    cache["scenarios"],
-                    cache["matrix"],
-                )
-
-                render_live_market_fragment(
-                    live_fragment_path,
-                    active_views,
-                    cache["validated_strategies"],
-                )
-
-                refresh_elapsed = (
-                    time.perf_counter() - refresh_started
-                )
-
-                print(
-                    f"Live quote refresh: "
-                    f"{counts['markets']} market(s), "
-                    f"{refresh_elapsed:.2f}s"
-                )
-
-                # Maintain the requested cadence instead of sleeping
-                # the full interval AFTER the request.
-                remaining = interval - refresh_elapsed
-
-                if remaining > 0:
-                    time.sleep(remaining)
+            )
 
         finally:
             connection.close()
+
+        return
 
     if args.command == "serve":
         server = ThreadingHTTPServer((args.host, args.port), SimpleHTTPRequestHandler)

@@ -152,6 +152,13 @@ class ActiveMarketSideView:
     median_best_subsequent_price: float | None
     matched_scenarios: list[str]
 
+    # Optional fast/live quote fields. Historical callers can
+    # continue constructing this model without supplying them.
+    bid_price: float | None = None
+    ask_price: float | None = None
+    close_ts: int | None = None
+    quote_ts_ms: int | None = None
+
 
 
 @dataclass(slots=True)
