@@ -97,6 +97,53 @@ CREATE TABLE IF NOT EXISTS btc_1s (
 );
 
 CREATE INDEX IF NOT EXISTS idx_btc_1s_source_ts ON btc_1s (source, ts);
+
+CREATE TABLE IF NOT EXISTS btc_feature_snapshots (
+    ts INTEGER PRIMARY KEY,
+    source TEXT NOT NULL,
+
+    spot REAL,
+    best_bid REAL,
+    best_ask REAL,
+    spread_bps REAL,
+
+    return_30s REAL,
+    return_60s REAL,
+    return_180s REAL,
+    return_300s REAL,
+
+    ema_5 REAL,
+    ema_9 REAL,
+    ema_21 REAL,
+    ema_5_9_bps REAL,
+    ema_9_21_bps REAL,
+    ema_5_slope_bps REAL,
+    ema_9_slope_bps REAL,
+    ema_21_slope_bps REAL,
+
+    vwap_60s REAL,
+    vwap_300s REAL,
+    vwap_distance_60s_bps REAL,
+    vwap_distance_300s_bps REAL,
+
+    realized_vol_60s_bps REAL,
+    realized_vol_300s_bps REAL,
+
+    range_60s_bps REAL,
+    range_300s_bps REAL,
+
+    trade_volume_60s REAL,
+    trade_volume_300s REAL,
+    relative_volume_60s REAL,
+
+    trade_imbalance_60s REAL,
+    trade_imbalance_300s REAL,
+
+    book_imbalance_top10 REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_btc_features_source_ts
+ON btc_feature_snapshots (source, ts);
 """
 
 
