@@ -21,6 +21,7 @@ ACCOUNT_SUPERVISOR_PID=""
 PROSPECTIVE_SUPERVISOR_PID=""
 TRIGGER_SHADOW_SUPERVISOR_PID=""
 SHADOW_LAB_SUPERVISOR_PID=""
+CHALLENGER_SUPERVISOR_PID=""
 
 if [[ ! -x "$PYTHON" ]]; then
     echo "ERROR: .venv Python not found."
@@ -158,6 +159,7 @@ cleanup() {
     echo
     echo "Stopping managed services..."
 
+    stop_supervisor "$CHALLENGER_SUPERVISOR_PID"
     stop_supervisor "$SHADOW_LAB_SUPERVISOR_PID"
     stop_supervisor "$TRIGGER_SHADOW_SUPERVISOR_PID"
     stop_supervisor "$PROSPECTIVE_SUPERVISOR_PID"
@@ -405,6 +407,35 @@ fi
 
 
 
+# ============================================================
+# Automatic challenger generator
+# ============================================================
+
+if pgrep -f \
+    'python.*-m kalshi_stats\.challenger_generator' \
+    >/dev/null 2>&1
+then
+    echo "Challenger generator already running."
+else
+    : > reports/challenger_generator.log
+
+    supervise_service \
+        "Automatic Challenger Generator" \
+        "reports/challenger_generator.log" \
+        -m kalshi_stats.challenger_generator \
+        --db "$DB" \
+        --interval 900 \
+        > /dev/null 2>&1 &
+
+    CHALLENGER_SUPERVISOR_PID=$!
+
+    echo \
+        "Challenger generator started " \
+        "(log: reports/challenger_generator.log)"
+fi
+
+
+
 echo
 echo "Dashboard:"
 echo "$URL"
@@ -440,6 +471,7 @@ echo "  Account tracking     reports/account_sync.log"
 echo "  Prospective logger   reports/prospective.log"
 echo "  Trigger shadow       reports/trigger_shadow.log"
 echo "  Continuous lab       reports/shadow_lab.log"
+echo "  Challenger generator reports/challenger_generator.log"
 echo
 echo "Press Ctrl+C to stop everything started here."
 echo

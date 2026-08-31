@@ -546,6 +546,9 @@ def main_events(
 
             confirmations.market_ticker,
 
+            confirmations.entry_ask,
+            confirmations.seconds_remaining,
+
             intents.entry_notional,
             intents.bid_proxy_gross_pnl
 
@@ -585,7 +588,63 @@ def main_events(
 
     events = []
 
+    entry_low = definition.get(
+        "entry_low"
+    )
+
+    entry_high = definition.get(
+        "entry_high"
+    )
+
+    seconds_low = definition.get(
+        "seconds_low"
+    )
+
+    seconds_high = definition.get(
+        "seconds_high"
+    )
+
     for row in rows:
+        entry_ask = float(
+            row[
+                "entry_ask"
+            ]
+        )
+
+        seconds_remaining = float(
+            row[
+                "seconds_remaining"
+            ]
+        )
+
+        if (
+            entry_low is not None
+            and entry_ask
+            < float(entry_low)
+        ):
+            continue
+
+        if (
+            entry_high is not None
+            and entry_ask
+            > float(entry_high)
+        ):
+            continue
+
+        if (
+            seconds_low is not None
+            and seconds_remaining
+            < float(seconds_low)
+        ):
+            continue
+
+        if (
+            seconds_high is not None
+            and seconds_remaining
+            > float(seconds_high)
+        ):
+            continue
+
         notional = float(
             row[
                 "entry_notional"
@@ -790,7 +849,10 @@ def events_for_strategy(
         ]
     )
 
-    if family == "MAIN_TRIGGER":
+    if family in {
+        "MAIN_TRIGGER",
+        "MAIN_CONTEXT",
+    }:
         return main_events(
             connection,
             definition=definition,
@@ -799,7 +861,10 @@ def events_for_strategy(
             ),
         )
 
-    if family == "MICRO_MULTIPLIER":
+    if family in {
+        "MICRO_MULTIPLIER",
+        "MICRO_LIVE_DISCOVERY",
+    }:
         return micro_events(
             connection,
             definition=definition,
