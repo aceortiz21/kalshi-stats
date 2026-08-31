@@ -672,6 +672,184 @@ ON shadow_strategy_score_snapshots (
 
 
 
+CREATE TABLE IF NOT EXISTS topbook_snapshots (
+    market_ticker TEXT NOT NULL,
+    ts_ms INTEGER NOT NULL,
+
+    yes_bid REAL NOT NULL,
+    yes_bid_size REAL,
+
+    yes_ask REAL NOT NULL,
+    yes_ask_size REAL,
+
+    no_bid REAL NOT NULL,
+    no_bid_size REAL,
+
+    no_ask REAL NOT NULL,
+    no_ask_size REAL,
+
+    source TEXT NOT NULL,
+
+    PRIMARY KEY (
+        market_ticker,
+        ts_ms
+    )
+);
+
+CREATE INDEX IF NOT EXISTS
+idx_topbook_market_time
+ON topbook_snapshots (
+    market_ticker,
+    ts_ms
+);
+
+
+CREATE TABLE IF NOT EXISTS paper_accounts (
+    strategy_key TEXT PRIMARY KEY,
+
+    starting_cash REAL NOT NULL,
+    cash REAL NOT NULL,
+    realized_pnl REAL NOT NULL DEFAULT 0,
+
+    trade_notional REAL NOT NULL,
+
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+
+    enabled INTEGER NOT NULL DEFAULT 1,
+
+    FOREIGN KEY (
+        strategy_key
+    )
+    REFERENCES shadow_strategy_registry(
+        strategy_key
+    )
+);
+
+
+CREATE TABLE IF NOT EXISTS paper_trades (
+    paper_trade_id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    strategy_key TEXT NOT NULL,
+    signal_key TEXT NOT NULL,
+
+    family TEXT NOT NULL,
+
+    market_ticker TEXT NOT NULL,
+    side TEXT NOT NULL,
+
+    signal_ts_ms INTEGER NOT NULL,
+
+    entry_limit REAL NOT NULL,
+
+    requested_count REAL,
+    filled_count REAL NOT NULL DEFAULT 0,
+
+    entry_avg_price REAL,
+    entry_notional REAL NOT NULL DEFAULT 0,
+    entry_fee REAL NOT NULL DEFAULT 0,
+
+    entry_status TEXT NOT NULL
+        DEFAULT 'WAITING',
+
+    entry_first_fill_ts_ms INTEGER,
+    entry_done_ts_ms INTEGER,
+
+    tp_price REAL,
+    sl_price REAL,
+
+    stop_triggered INTEGER NOT NULL
+        DEFAULT 0,
+
+    remaining_count REAL NOT NULL
+        DEFAULT 0,
+
+    exit_avg_price REAL,
+    exit_notional REAL NOT NULL DEFAULT 0,
+    exit_fee REAL NOT NULL DEFAULT 0,
+
+    exit_status TEXT NOT NULL
+        DEFAULT 'OPEN',
+
+    exit_reason TEXT,
+
+    exit_first_fill_ts_ms INTEGER,
+    closed_at_ms INTEGER,
+
+    gross_pnl REAL,
+    net_pnl REAL,
+
+    last_book_ts_ms INTEGER,
+
+    state TEXT NOT NULL
+        DEFAULT 'WAITING_ENTRY',
+
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+
+    UNIQUE (
+        strategy_key,
+        signal_key
+    ),
+
+    FOREIGN KEY (
+        strategy_key
+    )
+    REFERENCES shadow_strategy_registry(
+        strategy_key
+    )
+);
+
+CREATE INDEX IF NOT EXISTS
+idx_paper_trades_state
+ON paper_trades (
+    state,
+    signal_ts_ms
+);
+
+CREATE INDEX IF NOT EXISTS
+idx_paper_trades_strategy
+ON paper_trades (
+    strategy_key,
+    signal_ts_ms
+);
+
+
+CREATE TABLE IF NOT EXISTS paper_fills (
+    paper_fill_id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    paper_trade_id INTEGER NOT NULL,
+
+    leg TEXT NOT NULL,
+
+    ts_ms INTEGER NOT NULL,
+
+    price REAL NOT NULL,
+    count REAL NOT NULL,
+    notional REAL NOT NULL,
+
+    fee REAL NOT NULL DEFAULT 0,
+
+    liquidity TEXT NOT NULL,
+    reason TEXT,
+
+    FOREIGN KEY (
+        paper_trade_id
+    )
+    REFERENCES paper_trades(
+        paper_trade_id
+    )
+);
+
+CREATE INDEX IF NOT EXISTS
+idx_paper_fills_trade
+ON paper_fills (
+    paper_trade_id,
+    ts_ms
+);
+
+
+
 CREATE TABLE IF NOT EXISTS fill_feature_snapshots (
     fill_id TEXT PRIMARY KEY,
 

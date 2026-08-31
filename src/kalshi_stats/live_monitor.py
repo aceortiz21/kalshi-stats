@@ -1147,6 +1147,16 @@ async def run_websocket_live_loop(
                                             ticker_update
                                             .ts_ms
                                         ),
+
+                                        yes_bid_size=(
+                                            ticker_update
+                                            .yes_bid_size
+                                        ),
+
+                                        yes_ask_size=(
+                                            ticker_update
+                                            .yes_ask_size
+                                        ),
                                     )
 
                                     last_saved_second = (

@@ -14,6 +14,10 @@ from .trigger_shadow import (
     PROFILES,
 )
 
+from .paper_broker import (
+    paper_events,
+)
+
 
 def strategy_status(
     *,
@@ -831,15 +835,17 @@ def events_for_strategy(
     connection,
     registry_row,
 ):
-    definition = json.loads(
-        registry_row[
-            "definition_json"
-        ]
-    )
+    """
+    Official forward Shadow Lab evidence now comes
+    from realistic PaperBroker trades.
 
-    family = str(
+    Historical/proxy research remains elsewhere in
+    the database but does not score this forward lab.
+    """
+
+    strategy_key = str(
         registry_row[
-            "family"
+            "strategy_key"
         ]
     )
 
@@ -849,31 +855,12 @@ def events_for_strategy(
         ]
     )
 
-    if family in {
-        "MAIN_TRIGGER",
-        "MAIN_CONTEXT",
-    }:
-        return main_events(
-            connection,
-            definition=definition,
-            shadow_start_ms=(
-                shadow_start_ms
-            ),
-        )
+    return paper_events(
+        connection,
+        strategy_key,
+        after_ms=shadow_start_ms,
+    )
 
-    if family in {
-        "MICRO_MULTIPLIER",
-        "MICRO_LIVE_DISCOVERY",
-    }:
-        return micro_events(
-            connection,
-            definition=definition,
-            shadow_start_ms=(
-                shadow_start_ms
-            ),
-        )
-
-    return []
 
 
 def save_score(

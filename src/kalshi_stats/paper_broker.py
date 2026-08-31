@@ -1,0 +1,2467 @@
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import statistics
+import time
+
+from decimal import (
+    Decimal,
+    ROUND_DOWN,
+    ROUND_CEILING,
+)
+
+from .database import (
+    connect,
+    init_db,
+)
+
+
+DEFAULT_STARTING_CASH = 10.0
+DEFAULT_TRADE_NOTIONAL = 0.01
+
+ENTRY_WAIT_MS = 2000
+
+EPSILON = 1e-9
+
+
+def floor_contract_count(
+    notional,
+    price,
+):
+    """
+    Kalshi fixed-point contract quantity:
+    minimum increment = 0.01 contract.
+    """
+
+    price = Decimal(
+        str(
+            price
+        )
+    )
+
+    notional = Decimal(
+        str(
+            notional
+        )
+    )
+
+    if (
+        price <= 0
+        or notional <= 0
+    ):
+        return 0.0
+
+    raw = (
+        notional
+        / price
+    )
+
+    hundredths = (
+        raw
+        * Decimal("100")
+    ).to_integral_value(
+        rounding=ROUND_DOWN
+    )
+
+    return float(
+        hundredths
+        / Decimal("100")
+    )
+
+
+def taker_fee_estimate(
+    count,
+    price,
+):
+    """
+    Standard event-contract trade-fee proxy.
+
+    Kalshi additionally applies balance/rounding
+    mechanics to fractional/subpenny fills. We retain
+    this fee separately as an estimate until actual
+    live fills can provide exchange-reported fee_cost.
+    """
+
+    count = Decimal(
+        str(
+            count
+        )
+    )
+
+    price = Decimal(
+        str(
+            price
+        )
+    )
+
+    if (
+        count <= 0
+        or price <= 0
+        or price >= 1
+    ):
+        return 0.0
+
+    raw = (
+        Decimal("0.07")
+        * count
+        * price
+        * (
+            Decimal("1")
+            - price
+        )
+    )
+
+    centicent = Decimal(
+        "0.0001"
+    )
+
+    rounded = (
+        (
+            raw
+            / centicent
+        ).to_integral_value(
+            rounding=ROUND_CEILING
+        )
+        * centicent
+    )
+
+    return float(
+        rounded
+    )
+
+
+def side_book(
+    row,
+    side,
+):
+    side = str(
+        side
+    ).lower()
+
+    if side not in {
+        "yes",
+        "no",
+    }:
+        raise ValueError(
+            f"Unknown side: {side}"
+        )
+
+    return {
+        "bid":
+            float(
+                row[
+                    f"{side}_bid"
+                ]
+            ),
+
+        "bid_size":
+            (
+                None
+                if row[
+                    f"{side}_bid_size"
+                ]
+                is None
+                else float(
+                    row[
+                        f"{side}_bid_size"
+                    ]
+                )
+            ),
+
+        "ask":
+            float(
+                row[
+                    f"{side}_ask"
+                ]
+            ),
+
+        "ask_size":
+            (
+                None
+                if row[
+                    f"{side}_ask_size"
+                ]
+                is None
+                else float(
+                    row[
+                        f"{side}_ask_size"
+                    ]
+                )
+            ),
+    }
+
+
+def ensure_accounts(
+    connection,
+    *,
+    now_ms,
+    starting_cash,
+    trade_notional,
+):
+    strategies = connection.execute(
+        """
+        SELECT strategy_key
+
+        FROM shadow_strategy_registry
+
+        WHERE enabled = 1
+        """
+    ).fetchall()
+
+    inserted = 0
+
+    for strategy in strategies:
+        cursor = connection.execute(
+            """
+            INSERT OR IGNORE INTO
+            paper_accounts (
+                strategy_key,
+
+                starting_cash,
+                cash,
+                realized_pnl,
+
+                trade_notional,
+
+                created_at_ms,
+                updated_at_ms,
+
+                enabled
+            )
+            VALUES (
+                ?,
+                ?,
+                ?,
+                0,
+                ?,
+                ?,
+                ?,
+                1
+            )
+            """,
+            (
+                strategy[
+                    "strategy_key"
+                ],
+
+                float(
+                    starting_cash
+                ),
+
+                float(
+                    starting_cash
+                ),
+
+                float(
+                    trade_notional
+                ),
+
+                int(
+                    now_ms
+                ),
+
+                int(
+                    now_ms
+                ),
+            ),
+        )
+
+        inserted += max(
+            0,
+            int(
+                cursor.rowcount
+                or 0
+            ),
+        )
+
+    return inserted
+
+
+def insert_signal(
+    connection,
+    *,
+    strategy_key,
+    family,
+    signal_key,
+    market_ticker,
+    side,
+    signal_ts_ms,
+    entry_limit,
+    tp_price,
+    sl_price,
+    now_ms,
+):
+    cursor = connection.execute(
+        """
+        INSERT OR IGNORE INTO
+        paper_trades (
+            strategy_key,
+            signal_key,
+
+            family,
+
+            market_ticker,
+            side,
+
+            signal_ts_ms,
+
+            entry_limit,
+
+            tp_price,
+            sl_price,
+
+            created_at_ms,
+            updated_at_ms
+        )
+        VALUES (
+            ?, ?,
+            ?,
+            ?, ?,
+            ?,
+            ?,
+            ?, ?,
+            ?, ?
+        )
+        """,
+        (
+            strategy_key,
+            signal_key,
+
+            family,
+
+            market_ticker,
+            side,
+
+            int(
+                signal_ts_ms
+            ),
+
+            float(
+                entry_limit
+            ),
+
+            (
+                None
+                if tp_price is None
+                else float(
+                    tp_price
+                )
+            ),
+
+            (
+                None
+                if sl_price is None
+                else float(
+                    sl_price
+                )
+            ),
+
+            int(
+                now_ms
+            ),
+
+            int(
+                now_ms
+            ),
+        ),
+    )
+
+    return max(
+        0,
+        int(
+            cursor.rowcount
+            or 0
+        ),
+    )
+
+
+def discover_main_signals(
+    connection,
+    registry,
+    account,
+    *,
+    now_ms,
+):
+    definition = json.loads(
+        registry[
+            "definition_json"
+        ]
+    )
+
+    profile_id = str(
+        definition[
+            "profile_id"
+        ]
+    )
+
+    start_ms = max(
+        int(
+            registry[
+                "shadow_start_ms"
+            ]
+        ),
+        int(
+            account[
+                "created_at_ms"
+            ]
+        ),
+    )
+
+    rows = connection.execute(
+        """
+        SELECT *
+        FROM main_trigger_confirmations
+
+        WHERE profile_id = ?
+          AND status = 'CONFIRMED'
+          AND confirmed_at_ms >= ?
+          AND confirmed_at_ms <= ?
+
+        ORDER BY confirmed_at_ms
+        """,
+        (
+            profile_id,
+            start_ms,
+            int(
+                now_ms
+            ),
+        ),
+    ).fetchall()
+
+    inserted = 0
+
+    entry_low = definition.get(
+        "entry_low"
+    )
+
+    entry_high = definition.get(
+        "entry_high"
+    )
+
+    seconds_low = definition.get(
+        "seconds_low"
+    )
+
+    seconds_high = definition.get(
+        "seconds_high"
+    )
+
+    for row in rows:
+        entry = float(
+            row[
+                "entry_ask"
+            ]
+        )
+
+        seconds = float(
+            row[
+                "seconds_remaining"
+            ]
+        )
+
+        if (
+            entry_low is not None
+            and entry
+            < float(
+                entry_low
+            )
+        ):
+            continue
+
+        if (
+            entry_high is not None
+            and entry
+            > float(
+                entry_high
+            )
+        ):
+            continue
+
+        if (
+            seconds_low is not None
+            and seconds
+            < float(
+                seconds_low
+            )
+        ):
+            continue
+
+        if (
+            seconds_high is not None
+            and seconds
+            > float(
+                seconds_high
+            )
+        ):
+            continue
+
+        inserted += insert_signal(
+            connection,
+
+            strategy_key=(
+                registry[
+                    "strategy_key"
+                ]
+            ),
+
+            family=(
+                registry[
+                    "family"
+                ]
+            ),
+
+            signal_key=(
+                "confirmation:"
+                + str(
+                    row[
+                        "confirmation_id"
+                    ]
+                )
+            ),
+
+            market_ticker=(
+                row[
+                    "market_ticker"
+                ]
+            ),
+
+            side=(
+                row[
+                    "side"
+                ]
+            ),
+
+            signal_ts_ms=(
+                row[
+                    "confirmed_at_ms"
+                ]
+            ),
+
+            entry_limit=entry,
+
+            tp_price=(
+                row[
+                    "tp_price"
+                ]
+            ),
+
+            sl_price=(
+                row[
+                    "sl_price"
+                ]
+            ),
+
+            now_ms=now_ms,
+        )
+
+    return inserted
+
+
+def discover_micro_signals(
+    connection,
+    registry,
+    account,
+    *,
+    now_ms,
+):
+    definition = json.loads(
+        registry[
+            "definition_json"
+        ]
+    )
+
+    entry_key = int(
+        definition[
+            "entry_price_key"
+        ]
+    )
+
+    bucket = str(
+        definition[
+            "time_bucket"
+        ]
+    )
+
+    target_key = int(
+        definition[
+            "target_price_key"
+        ]
+    )
+
+    start_ms = max(
+        int(
+            registry[
+                "shadow_start_ms"
+            ]
+        ),
+        int(
+            account[
+                "created_at_ms"
+            ]
+        ),
+    )
+
+    rows = connection.execute(
+        """
+        SELECT
+            opportunities.*,
+            targets.target_price
+
+        FROM micro_multiplier_opportunities
+            AS opportunities
+
+        JOIN micro_multiplier_targets
+            AS targets
+
+          ON targets.micro_opportunity_id
+             =
+             opportunities.micro_opportunity_id
+
+        WHERE
+            opportunities.entry_price_key = ?
+
+          AND opportunities.time_bucket = ?
+
+          AND CAST(
+                ROUND(
+                    targets.target_price
+                    * 1000
+                )
+                AS INTEGER
+              ) = ?
+
+          AND opportunities.detected_at_ms
+              >= ?
+
+          AND opportunities.detected_at_ms
+              <= ?
+
+        ORDER BY
+            opportunities.detected_at_ms,
+            opportunities.micro_opportunity_id
+        """,
+        (
+            entry_key,
+            bucket,
+            target_key,
+            start_ms,
+            int(
+                now_ms
+            ),
+        ),
+    ).fetchall()
+
+    inserted = 0
+
+    for row in rows:
+        inserted += insert_signal(
+            connection,
+
+            strategy_key=(
+                registry[
+                    "strategy_key"
+                ]
+            ),
+
+            family=(
+                registry[
+                    "family"
+                ]
+            ),
+
+            signal_key=(
+                "micro:"
+                + str(
+                    row[
+                        "micro_opportunity_id"
+                    ]
+                )
+                + ":"
+                + str(
+                    target_key
+                )
+            ),
+
+            market_ticker=(
+                row[
+                    "market_ticker"
+                ]
+            ),
+
+            side=(
+                row[
+                    "side"
+                ]
+            ),
+
+            signal_ts_ms=(
+                row[
+                    "detected_at_ms"
+                ]
+            ),
+
+            entry_limit=(
+                row[
+                    "entry_ask"
+                ]
+            ),
+
+            tp_price=(
+                row[
+                    "target_price"
+                ]
+            ),
+
+            # Micro strategy has no stop.
+            sl_price=None,
+
+            now_ms=now_ms,
+        )
+
+    return inserted
+
+
+def discover_signals(
+    connection,
+    *,
+    now_ms,
+):
+    rows = connection.execute(
+        """
+        SELECT
+            registry.*,
+
+            accounts.created_at_ms
+                AS account_created_at_ms,
+
+            accounts.trade_notional,
+
+            accounts.cash
+
+        FROM shadow_strategy_registry
+            AS registry
+
+        JOIN paper_accounts
+            AS accounts
+
+          ON accounts.strategy_key
+             =
+             registry.strategy_key
+
+        WHERE registry.enabled = 1
+          AND accounts.enabled = 1
+        """
+    ).fetchall()
+
+    inserted = 0
+
+    for registry in rows:
+        account = {
+            "created_at_ms":
+                registry[
+                    "account_created_at_ms"
+                ],
+        }
+
+        family = str(
+            registry[
+                "family"
+            ]
+        )
+
+        if family in {
+            "MAIN_TRIGGER",
+            "MAIN_CONTEXT",
+        }:
+            inserted += (
+                discover_main_signals(
+                    connection,
+                    registry,
+                    account,
+                    now_ms=now_ms,
+                )
+            )
+
+        elif family in {
+            "MICRO_MULTIPLIER",
+            "MICRO_LIVE_DISCOVERY",
+        }:
+            inserted += (
+                discover_micro_signals(
+                    connection,
+                    registry,
+                    account,
+                    now_ms=now_ms,
+                )
+            )
+
+    return inserted
+
+
+def first_entry_book(
+    connection,
+    trade,
+):
+    return connection.execute(
+        """
+        SELECT *
+        FROM topbook_snapshots
+
+        WHERE market_ticker = ?
+          AND ts_ms >= ?
+          AND ts_ms <= ?
+
+        ORDER BY ts_ms
+        LIMIT 1
+        """,
+        (
+            trade[
+                "market_ticker"
+            ],
+
+            int(
+                trade[
+                    "signal_ts_ms"
+                ]
+            ),
+
+            int(
+                trade[
+                    "signal_ts_ms"
+                ]
+            )
+            + ENTRY_WAIT_MS,
+        ),
+    ).fetchone()
+
+
+def record_fill(
+    connection,
+    *,
+    paper_trade_id,
+    leg,
+    ts_ms,
+    price,
+    count,
+    fee,
+    liquidity,
+    reason,
+):
+    connection.execute(
+        """
+        INSERT INTO paper_fills (
+            paper_trade_id,
+
+            leg,
+
+            ts_ms,
+
+            price,
+            count,
+            notional,
+
+            fee,
+
+            liquidity,
+            reason
+        )
+        VALUES (
+            ?,
+            ?,
+            ?,
+            ?,
+            ?,
+            ?,
+            ?,
+            ?,
+            ?
+        )
+        """,
+        (
+            paper_trade_id,
+
+            leg,
+
+            int(
+                ts_ms
+            ),
+
+            float(
+                price
+            ),
+
+            float(
+                count
+            ),
+
+            float(
+                price
+            )
+            * float(
+                count
+            ),
+
+            float(
+                fee
+            ),
+
+            liquidity,
+            reason,
+        ),
+    )
+
+
+def process_entries(
+    connection,
+    *,
+    now_ms,
+):
+    trades = connection.execute(
+        """
+        SELECT
+            trades.*,
+
+            accounts.cash,
+            accounts.trade_notional
+
+        FROM paper_trades
+            AS trades
+
+        JOIN paper_accounts
+            AS accounts
+
+          ON accounts.strategy_key
+             =
+             trades.strategy_key
+
+        WHERE trades.state
+              = 'WAITING_ENTRY'
+
+        ORDER BY trades.signal_ts_ms
+        """
+    ).fetchall()
+
+    changed = 0
+
+    for trade in trades:
+        book_row = first_entry_book(
+            connection,
+            trade,
+        )
+
+        deadline = (
+            int(
+                trade[
+                    "signal_ts_ms"
+                ]
+            )
+            + ENTRY_WAIT_MS
+        )
+
+        if book_row is None:
+            if now_ms <= deadline:
+                continue
+
+            connection.execute(
+                """
+                UPDATE paper_trades
+
+                SET
+                    state = 'NO_FILL',
+                    entry_status = 'NO_BOOK',
+                    updated_at_ms = ?
+
+                WHERE paper_trade_id = ?
+                """,
+                (
+                    int(
+                        now_ms
+                    ),
+
+                    trade[
+                        "paper_trade_id"
+                    ],
+                ),
+            )
+
+            changed += 1
+            continue
+
+        book = side_book(
+            book_row,
+            trade[
+                "side"
+            ],
+        )
+
+        ask = book[
+            "ask"
+        ]
+
+        ask_size = book[
+            "ask_size"
+        ]
+
+        # Model a real IOC limit order.
+        if (
+            ask_size is None
+            or ask_size <= 0
+            or ask
+            > float(
+                trade[
+                    "entry_limit"
+                ]
+            )
+        ):
+            connection.execute(
+                """
+                UPDATE paper_trades
+
+                SET
+                    state = 'NO_FILL',
+                    entry_status = 'IOC_NO_FILL',
+
+                    requested_count = 0,
+
+                    entry_done_ts_ms = ?,
+                    last_book_ts_ms = ?,
+                    updated_at_ms = ?
+
+                WHERE paper_trade_id = ?
+                """,
+                (
+                    int(
+                        book_row[
+                            "ts_ms"
+                        ]
+                    ),
+
+                    int(
+                        book_row[
+                            "ts_ms"
+                        ]
+                    ),
+
+                    int(
+                        now_ms
+                    ),
+
+                    trade[
+                        "paper_trade_id"
+                    ],
+                ),
+            )
+
+            changed += 1
+            continue
+
+        usable_cash = float(
+            trade[
+                "cash"
+            ]
+        )
+
+        requested_notional = min(
+            usable_cash,
+            float(
+                trade[
+                    "trade_notional"
+                ]
+            ),
+        )
+
+        requested_count = (
+            floor_contract_count(
+                requested_notional,
+                ask,
+            )
+        )
+
+        if requested_count < 0.01:
+            connection.execute(
+                """
+                UPDATE paper_trades
+
+                SET
+                    state = 'NO_CAPITAL',
+                    entry_status = 'NO_CAPITAL',
+
+                    requested_count = ?,
+
+                    entry_done_ts_ms = ?,
+                    last_book_ts_ms = ?,
+                    updated_at_ms = ?
+
+                WHERE paper_trade_id = ?
+                """,
+                (
+                    requested_count,
+
+                    int(
+                        book_row[
+                            "ts_ms"
+                        ]
+                    ),
+
+                    int(
+                        book_row[
+                            "ts_ms"
+                        ]
+                    ),
+
+                    int(
+                        now_ms
+                    ),
+
+                    trade[
+                        "paper_trade_id"
+                    ],
+                ),
+            )
+
+            changed += 1
+            continue
+
+        fill_count = min(
+            requested_count,
+            float(
+                ask_size
+            ),
+        )
+
+        # Exchange quantity granularity.
+        fill_count = (
+            math.floor(
+                (
+                    fill_count
+                    + EPSILON
+                )
+                * 100
+            )
+            / 100.0
+        )
+
+        if fill_count < 0.01:
+            connection.execute(
+                """
+                UPDATE paper_trades
+
+                SET
+                    state = 'NO_FILL',
+                    entry_status = 'IOC_NO_FILL',
+
+                    requested_count = ?,
+
+                    entry_done_ts_ms = ?,
+                    last_book_ts_ms = ?,
+                    updated_at_ms = ?
+
+                WHERE paper_trade_id = ?
+                """,
+                (
+                    requested_count,
+
+                    int(
+                        book_row[
+                            "ts_ms"
+                        ]
+                    ),
+
+                    int(
+                        book_row[
+                            "ts_ms"
+                        ]
+                    ),
+
+                    int(
+                        now_ms
+                    ),
+
+                    trade[
+                        "paper_trade_id"
+                    ],
+                ),
+            )
+
+            changed += 1
+            continue
+
+        cost = (
+            fill_count
+            * ask
+        )
+
+        fee = taker_fee_estimate(
+            fill_count,
+            ask,
+        )
+
+        # This should rarely matter with a $10 paper
+        # account, but never allow paper cash negative.
+        while (
+            fill_count >= 0.01
+            and cost
+            + fee
+            > usable_cash
+            + EPSILON
+        ):
+            fill_count = round(
+                fill_count
+                - 0.01,
+                2,
+            )
+
+            cost = (
+                fill_count
+                * ask
+            )
+
+            fee = taker_fee_estimate(
+                fill_count,
+                ask,
+            )
+
+        if fill_count < 0.01:
+            connection.execute(
+                """
+                UPDATE paper_trades
+
+                SET
+                    state = 'NO_CAPITAL',
+                    entry_status = 'NO_CAPITAL',
+                    requested_count = ?,
+                    updated_at_ms = ?
+
+                WHERE paper_trade_id = ?
+                """,
+                (
+                    requested_count,
+
+                    int(
+                        now_ms
+                    ),
+
+                    trade[
+                        "paper_trade_id"
+                    ],
+                ),
+            )
+
+            changed += 1
+            continue
+
+        entry_status = (
+            "FILLED"
+            if (
+                fill_count
+                + EPSILON
+                >= requested_count
+            )
+            else "PARTIAL_IOC"
+        )
+
+        record_fill(
+            connection,
+
+            paper_trade_id=(
+                trade[
+                    "paper_trade_id"
+                ]
+            ),
+
+            leg="ENTRY",
+
+            ts_ms=(
+                book_row[
+                    "ts_ms"
+                ]
+            ),
+
+            price=ask,
+            count=fill_count,
+            fee=fee,
+
+            liquidity="TAKER",
+            reason="ENTRY_IOC",
+        )
+
+        connection.execute(
+            """
+            UPDATE paper_accounts
+
+            SET
+                cash = cash - ?,
+                updated_at_ms = ?
+
+            WHERE strategy_key = ?
+            """,
+            (
+                cost
+                + fee,
+
+                int(
+                    now_ms
+                ),
+
+                trade[
+                    "strategy_key"
+                ],
+            ),
+        )
+
+        connection.execute(
+            """
+            UPDATE paper_trades
+
+            SET
+                requested_count = ?,
+
+                filled_count = ?,
+                remaining_count = ?,
+
+                entry_avg_price = ?,
+                entry_notional = ?,
+                entry_fee = ?,
+
+                entry_status = ?,
+
+                entry_first_fill_ts_ms = ?,
+                entry_done_ts_ms = ?,
+
+                last_book_ts_ms = ?,
+
+                state = 'OPEN',
+                updated_at_ms = ?
+
+            WHERE paper_trade_id = ?
+            """,
+            (
+                requested_count,
+
+                fill_count,
+                fill_count,
+
+                ask,
+                cost,
+                fee,
+
+                entry_status,
+
+                int(
+                    book_row[
+                        "ts_ms"
+                    ]
+                ),
+
+                int(
+                    book_row[
+                        "ts_ms"
+                    ]
+                ),
+
+                int(
+                    book_row[
+                        "ts_ms"
+                    ]
+                ),
+
+                int(
+                    now_ms
+                ),
+
+                trade[
+                    "paper_trade_id"
+                ],
+            ),
+        )
+
+        changed += 1
+
+    return changed
+
+
+def finalize_closed_trade(
+    connection,
+    trade_id,
+    *,
+    now_ms,
+):
+    trade = connection.execute(
+        """
+        SELECT *
+        FROM paper_trades
+
+        WHERE paper_trade_id = ?
+        """,
+        (
+            trade_id,
+        ),
+    ).fetchone()
+
+    fills = connection.execute(
+        """
+        SELECT *
+        FROM paper_fills
+
+        WHERE paper_trade_id = ?
+
+        ORDER BY ts_ms, paper_fill_id
+        """,
+        (
+            trade_id,
+        ),
+    ).fetchall()
+
+    entry_notional = sum(
+        float(
+            row[
+                "notional"
+            ]
+        )
+        for row
+        in fills
+        if row[
+            "leg"
+        ]
+        == "ENTRY"
+    )
+
+    exit_notional = sum(
+        float(
+            row[
+                "notional"
+            ]
+        )
+        for row
+        in fills
+        if row[
+            "leg"
+        ]
+        == "EXIT"
+    )
+
+    entry_fee = sum(
+        float(
+            row[
+                "fee"
+            ]
+        )
+        for row
+        in fills
+        if row[
+            "leg"
+        ]
+        == "ENTRY"
+    )
+
+    exit_fee = sum(
+        float(
+            row[
+                "fee"
+            ]
+        )
+        for row
+        in fills
+        if row[
+            "leg"
+        ]
+        == "EXIT"
+    )
+
+    gross_pnl = (
+        exit_notional
+        - entry_notional
+    )
+
+    net_pnl = (
+        gross_pnl
+        - entry_fee
+        - exit_fee
+    )
+
+    exit_fills = [
+        row
+        for row
+        in fills
+        if row[
+            "leg"
+        ]
+        == "EXIT"
+    ]
+
+    total_exit_count = sum(
+        float(
+            row[
+                "count"
+            ]
+        )
+        for row
+        in exit_fills
+    )
+
+    exit_avg = (
+        None
+        if total_exit_count <= 0
+        else sum(
+            float(
+                row[
+                    "price"
+                ]
+            )
+            * float(
+                row[
+                    "count"
+                ]
+            )
+            for row
+            in exit_fills
+        )
+        / total_exit_count
+    )
+
+    first_exit = (
+        None
+        if not exit_fills
+        else int(
+            exit_fills[0][
+                "ts_ms"
+            ]
+        )
+    )
+
+    last_exit = (
+        int(
+            now_ms
+        )
+        if not exit_fills
+        else int(
+            exit_fills[-1][
+                "ts_ms"
+            ]
+        )
+    )
+
+    reason = (
+        None
+        if not exit_fills
+        else str(
+            exit_fills[-1][
+                "reason"
+            ]
+            or ""
+        )
+    )
+
+    connection.execute(
+        """
+        UPDATE paper_trades
+
+        SET
+            remaining_count = 0,
+
+            exit_avg_price = ?,
+            exit_notional = ?,
+            exit_fee = ?,
+
+            exit_status = 'FILLED',
+            exit_reason = ?,
+
+            exit_first_fill_ts_ms = ?,
+            closed_at_ms = ?,
+
+            gross_pnl = ?,
+            net_pnl = ?,
+
+            state = 'CLOSED',
+            updated_at_ms = ?
+
+        WHERE paper_trade_id = ?
+        """,
+        (
+            exit_avg,
+            exit_notional,
+            exit_fee,
+
+            reason,
+
+            first_exit,
+            last_exit,
+
+            gross_pnl,
+            net_pnl,
+
+            int(
+                now_ms
+            ),
+
+            trade_id,
+        ),
+    )
+
+    connection.execute(
+        """
+        UPDATE paper_accounts
+
+        SET
+            realized_pnl =
+                realized_pnl + ?,
+
+            updated_at_ms = ?
+
+        WHERE strategy_key = ?
+        """,
+        (
+            net_pnl,
+
+            int(
+                now_ms
+            ),
+
+            trade[
+                "strategy_key"
+            ],
+        ),
+    )
+
+
+def process_open_trades(
+    connection,
+    *,
+    now_ms,
+):
+    trades = connection.execute(
+        """
+        SELECT *
+        FROM paper_trades
+
+        WHERE state IN (
+            'OPEN',
+            'STOP_EXIT'
+        )
+
+        ORDER BY signal_ts_ms
+        """
+    ).fetchall()
+
+    changed = 0
+
+    for trade in trades:
+        last_ts = int(
+            trade[
+                "last_book_ts_ms"
+            ]
+            or trade[
+                "entry_done_ts_ms"
+            ]
+            or trade[
+                "signal_ts_ms"
+            ]
+        )
+
+        book_rows = connection.execute(
+            """
+            SELECT *
+            FROM topbook_snapshots
+
+            WHERE market_ticker = ?
+              AND ts_ms > ?
+              AND ts_ms <= ?
+
+            ORDER BY ts_ms
+            """,
+            (
+                trade[
+                    "market_ticker"
+                ],
+
+                last_ts,
+
+                int(
+                    now_ms
+                ),
+            ),
+        ).fetchall()
+
+        remaining = float(
+            trade[
+                "remaining_count"
+            ]
+        )
+
+        stop_triggered = bool(
+            trade[
+                "stop_triggered"
+            ]
+        )
+
+        latest_processed = last_ts
+
+        for book_row in book_rows:
+            latest_processed = int(
+                book_row[
+                    "ts_ms"
+                ]
+            )
+
+            if remaining <= EPSILON:
+                break
+
+            book = side_book(
+                book_row,
+                trade[
+                    "side"
+                ],
+            )
+
+            bid = book[
+                "bid"
+            ]
+
+            bid_size = book[
+                "bid_size"
+            ]
+
+            if (
+                bid_size is None
+                or bid_size <= 0
+            ):
+                continue
+
+            reason = None
+            price = None
+            liquidity = None
+
+            sl_price = (
+                None
+                if trade[
+                    "sl_price"
+                ]
+                is None
+                else float(
+                    trade[
+                        "sl_price"
+                    ]
+                )
+            )
+
+            tp_price = (
+                None
+                if trade[
+                    "tp_price"
+                ]
+                is None
+                else float(
+                    trade[
+                        "tp_price"
+                    ]
+                )
+            )
+
+            if (
+                stop_triggered
+                or (
+                    sl_price is not None
+                    and bid
+                    <= sl_price
+                )
+            ):
+                stop_triggered = True
+
+                reason = "STOP"
+                price = bid
+
+                # The live executor would flatten
+                # immediately once the stop fires.
+                liquidity = "TAKER"
+
+            elif (
+                tp_price is not None
+                and bid
+                >= tp_price
+            ):
+                reason = "TP"
+
+                # Conservative resting-limit proxy:
+                # do not credit TP until an actual buyer
+                # exists at/above our target.
+                price = tp_price
+
+                liquidity = (
+                    "RESTING_LIMIT_PROXY"
+                )
+
+            if reason is None:
+                continue
+
+            fill_count = min(
+                remaining,
+                float(
+                    bid_size
+                ),
+            )
+
+            fill_count = (
+                math.floor(
+                    (
+                        fill_count
+                        + EPSILON
+                    )
+                    * 100
+                )
+                / 100.0
+            )
+
+            if fill_count < 0.01:
+                continue
+
+            # Conservatively charge taker-rate fee even
+            # on the TP proxy until we model exact maker
+            # fee eligibility for KXBTC15M.
+            fee = taker_fee_estimate(
+                fill_count,
+                price,
+            )
+
+            proceeds = (
+                fill_count
+                * price
+            )
+
+            record_fill(
+                connection,
+
+                paper_trade_id=(
+                    trade[
+                        "paper_trade_id"
+                    ]
+                ),
+
+                leg="EXIT",
+
+                ts_ms=(
+                    book_row[
+                        "ts_ms"
+                    ]
+                ),
+
+                price=price,
+                count=fill_count,
+                fee=fee,
+
+                liquidity=liquidity,
+                reason=reason,
+            )
+
+            connection.execute(
+                """
+                UPDATE paper_accounts
+
+                SET
+                    cash =
+                        cash + ? - ?,
+
+                    updated_at_ms = ?
+
+                WHERE strategy_key = ?
+                """,
+                (
+                    proceeds,
+                    fee,
+
+                    int(
+                        now_ms
+                    ),
+
+                    trade[
+                        "strategy_key"
+                    ],
+                ),
+            )
+
+            remaining -= fill_count
+
+            changed += 1
+
+        state = (
+            "STOP_EXIT"
+            if (
+                stop_triggered
+                and remaining
+                > EPSILON
+            )
+            else "OPEN"
+        )
+
+        connection.execute(
+            """
+            UPDATE paper_trades
+
+            SET
+                remaining_count = ?,
+                stop_triggered = ?,
+
+                last_book_ts_ms = ?,
+
+                state = ?,
+                updated_at_ms = ?
+
+            WHERE paper_trade_id = ?
+            """,
+            (
+                max(
+                    0.0,
+                    remaining
+                ),
+
+                int(
+                    stop_triggered
+                ),
+
+                latest_processed,
+
+                state,
+
+                int(
+                    now_ms
+                ),
+
+                trade[
+                    "paper_trade_id"
+                ],
+            ),
+        )
+
+        if remaining <= EPSILON:
+            finalize_closed_trade(
+                connection,
+                trade[
+                    "paper_trade_id"
+                ],
+                now_ms=now_ms,
+            )
+
+    return changed
+
+
+def settle_positions(
+    connection,
+    *,
+    now_ms,
+):
+    trades = connection.execute(
+        """
+        SELECT
+            trades.*,
+            markets.result
+
+        FROM paper_trades
+            AS trades
+
+        JOIN markets
+            AS markets
+
+          ON markets.ticker
+             =
+             trades.market_ticker
+
+        WHERE trades.state IN (
+            'OPEN',
+            'STOP_EXIT'
+        )
+
+          AND LOWER(
+                COALESCE(
+                    markets.result,
+                    ''
+                )
+              )
+              IN (
+                  'yes',
+                  'no'
+              )
+        """
+    ).fetchall()
+
+    changed = 0
+
+    for trade in trades:
+        remaining = float(
+            trade[
+                "remaining_count"
+            ]
+        )
+
+        if remaining <= EPSILON:
+            continue
+
+        result = str(
+            trade[
+                "result"
+            ]
+        ).lower()
+
+        side = str(
+            trade[
+                "side"
+            ]
+        ).lower()
+
+        settlement_price = (
+            1.0
+            if result == side
+            else 0.0
+        )
+
+        proceeds = (
+            remaining
+            * settlement_price
+        )
+
+        record_fill(
+            connection,
+
+            paper_trade_id=(
+                trade[
+                    "paper_trade_id"
+                ]
+            ),
+
+            leg="EXIT",
+
+            ts_ms=now_ms,
+
+            price=settlement_price,
+            count=remaining,
+
+            fee=0.0,
+
+            liquidity="SETTLEMENT",
+            reason="SETTLEMENT",
+        )
+
+        connection.execute(
+            """
+            UPDATE paper_accounts
+
+            SET
+                cash = cash + ?,
+                updated_at_ms = ?
+
+            WHERE strategy_key = ?
+            """,
+            (
+                proceeds,
+
+                int(
+                    now_ms
+                ),
+
+                trade[
+                    "strategy_key"
+                ],
+            ),
+        )
+
+        connection.execute(
+            """
+            UPDATE paper_trades
+
+            SET
+                remaining_count = 0,
+                updated_at_ms = ?
+
+            WHERE paper_trade_id = ?
+            """,
+            (
+                int(
+                    now_ms
+                ),
+
+                trade[
+                    "paper_trade_id"
+                ],
+            ),
+        )
+
+        finalize_closed_trade(
+            connection,
+            trade[
+                "paper_trade_id"
+            ],
+            now_ms=now_ms,
+        )
+
+        changed += 1
+
+    return changed
+
+
+def paper_events(
+    connection,
+    strategy_key,
+    *,
+    after_ms,
+):
+    rows = connection.execute(
+        """
+        SELECT
+            paper_trade_id,
+            market_ticker,
+            signal_ts_ms,
+
+            entry_notional,
+            entry_fee,
+
+            net_pnl
+
+        FROM paper_trades
+
+        WHERE strategy_key = ?
+          AND state = 'CLOSED'
+
+          AND signal_ts_ms >= ?
+
+          AND entry_notional > 0
+
+          AND net_pnl IS NOT NULL
+
+        ORDER BY
+            signal_ts_ms,
+            paper_trade_id
+        """,
+        (
+            strategy_key,
+            int(
+                after_ms
+            ),
+        ),
+    ).fetchall()
+
+    events = []
+
+    for row in rows:
+        capital_used = (
+            float(
+                row[
+                    "entry_notional"
+                ]
+            )
+            + float(
+                row[
+                    "entry_fee"
+                ]
+            )
+        )
+
+        if capital_used <= 0:
+            continue
+
+        events.append(
+            {
+                "ts":
+                    int(
+                        row[
+                            "signal_ts_ms"
+                        ]
+                    ),
+
+                "market_ticker":
+                    str(
+                        row[
+                            "market_ticker"
+                        ]
+                    ),
+
+                "roi":
+                    float(
+                        row[
+                            "net_pnl"
+                        ]
+                    )
+                    / capital_used,
+            }
+        )
+
+    return events
+
+
+def run_once(
+    connection,
+    *,
+    now_ms=None,
+    starting_cash=(
+        DEFAULT_STARTING_CASH
+    ),
+    trade_notional=(
+        DEFAULT_TRADE_NOTIONAL
+    ),
+):
+    if now_ms is None:
+        now_ms = int(
+            time.time()
+            * 1000
+        )
+
+    accounts = ensure_accounts(
+        connection,
+        now_ms=now_ms,
+        starting_cash=starting_cash,
+        trade_notional=trade_notional,
+    )
+
+    signals = discover_signals(
+        connection,
+        now_ms=now_ms,
+    )
+
+    entries = process_entries(
+        connection,
+        now_ms=now_ms,
+    )
+
+    exits = process_open_trades(
+        connection,
+        now_ms=now_ms,
+    )
+
+    settlements = settle_positions(
+        connection,
+        now_ms=now_ms,
+    )
+
+    connection.commit()
+
+    return {
+        "accounts_created":
+            accounts,
+
+        "signals_created":
+            signals,
+
+        "entries_changed":
+            entries,
+
+        "exits_changed":
+            exits,
+
+        "settlements":
+            settlements,
+    }
+
+
+def print_summary(
+    connection,
+):
+    accounts = connection.execute(
+        """
+        SELECT
+            COUNT(*)
+        FROM paper_accounts
+        WHERE enabled = 1
+        """
+    ).fetchone()[0]
+
+    waiting = connection.execute(
+        """
+        SELECT COUNT(*)
+        FROM paper_trades
+        WHERE state = 'WAITING_ENTRY'
+        """
+    ).fetchone()[0]
+
+    open_count = connection.execute(
+        """
+        SELECT COUNT(*)
+        FROM paper_trades
+        WHERE state IN (
+            'OPEN',
+            'STOP_EXIT'
+        )
+        """
+    ).fetchone()[0]
+
+    closed = connection.execute(
+        """
+        SELECT COUNT(*)
+        FROM paper_trades
+        WHERE state = 'CLOSED'
+        """
+    ).fetchone()[0]
+
+    no_fill = connection.execute(
+        """
+        SELECT COUNT(*)
+        FROM paper_trades
+        WHERE state IN (
+            'NO_FILL',
+            'NO_CAPITAL'
+        )
+        """
+    ).fetchone()[0]
+
+    best = connection.execute(
+        """
+        SELECT
+            strategy_key,
+            cash,
+            realized_pnl
+
+        FROM paper_accounts
+
+        WHERE enabled = 1
+
+        ORDER BY cash DESC
+        LIMIT 1
+        """
+    ).fetchone()
+
+    best_text = (
+        "none"
+        if best is None
+        else (
+            f"{best['strategy_key']} "
+            f"${float(best['cash']):.4f}"
+        )
+    )
+
+    print(
+        "PAPER BROKER | "
+        f"accounts={accounts} | "
+        f"waiting={waiting} | "
+        f"open={open_count} | "
+        f"closed={closed} | "
+        f"no_fill={no_fill} | "
+        f"best={best_text}"
+    )
+
+
+def run_loop(
+    connection,
+    *,
+    interval,
+    starting_cash,
+    trade_notional,
+):
+    last_log = 0.0
+
+    while True:
+        result = run_once(
+            connection,
+            starting_cash=(
+                starting_cash
+            ),
+            trade_notional=(
+                trade_notional
+            ),
+        )
+
+        now = time.monotonic()
+
+        if (
+            any(
+                result.values()
+            )
+            or now
+            - last_log
+            >= 10
+        ):
+            print_summary(
+                connection
+            )
+
+            last_log = now
+
+        time.sleep(
+            interval
+        )
+
+
+def main():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--db",
+        required=True,
+    )
+
+    parser.add_argument(
+        "--once",
+        action="store_true",
+    )
+
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=.25,
+    )
+
+    parser.add_argument(
+        "--starting-cash",
+        type=float,
+        default=(
+            DEFAULT_STARTING_CASH
+        ),
+    )
+
+    parser.add_argument(
+        "--trade-notional",
+        type=float,
+        default=(
+            DEFAULT_TRADE_NOTIONAL
+        ),
+    )
+
+    args = parser.parse_args()
+
+    connection = connect(
+        args.db
+    )
+
+    try:
+        init_db(
+            connection
+        )
+
+        if args.once:
+            print(
+                run_once(
+                    connection,
+
+                    starting_cash=(
+                        args.starting_cash
+                    ),
+
+                    trade_notional=(
+                        args.trade_notional
+                    ),
+                )
+            )
+
+            print_summary(
+                connection
+            )
+
+            return
+
+        run_loop(
+            connection,
+
+            interval=args.interval,
+
+            starting_cash=(
+                args.starting_cash
+            ),
+
+            trade_notional=(
+                args.trade_notional
+            ),
+        )
+
+    finally:
+        connection.close()
+
+
+if __name__ == "__main__":
+    main()

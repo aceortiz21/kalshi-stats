@@ -510,6 +510,8 @@ def insert_ws_quote_snapshot(
     volume: float | None,
     open_interest: float | None,
     ts_ms: int,
+    yes_bid_size: float | None = None,
+    yes_ask_size: float | None = None,
 ) -> None:
     """Persist one downsampled WebSocket quote observation."""
 
@@ -562,6 +564,102 @@ def insert_ws_quote_snapshot(
             open_interest,
         ),
     )
+
+    if (
+        yes_bid_size is not None
+        or yes_ask_size is not None
+    ):
+        no_bid_size = (
+            None
+            if yes_ask_size is None
+            else float(
+                yes_ask_size
+            )
+        )
+
+        no_ask_size = (
+            None
+            if yes_bid_size is None
+            else float(
+                yes_bid_size
+            )
+        )
+
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO
+            topbook_snapshots (
+                market_ticker,
+                ts_ms,
+
+                yes_bid,
+                yes_bid_size,
+
+                yes_ask,
+                yes_ask_size,
+
+                no_bid,
+                no_bid_size,
+
+                no_ask,
+                no_ask_size,
+
+                source
+            )
+            VALUES (
+                ?, ?,
+                ?, ?,
+                ?, ?,
+                ?, ?,
+                ?, ?,
+                'kalshi_ticker_ws'
+            )
+            """,
+            (
+                market_ticker,
+                int(
+                    ts_ms
+                ),
+
+                float(
+                    yes_bid
+                ),
+
+                (
+                    None
+                    if yes_bid_size
+                    is None
+                    else float(
+                        yes_bid_size
+                    )
+                ),
+
+                float(
+                    yes_ask
+                ),
+
+                (
+                    None
+                    if yes_ask_size
+                    is None
+                    else float(
+                        yes_ask_size
+                    )
+                ),
+
+                float(
+                    no_bid
+                ),
+
+                no_bid_size,
+
+                float(
+                    no_ask
+                ),
+
+                no_ask_size,
+            ),
+        )
 
     connection.commit()
 

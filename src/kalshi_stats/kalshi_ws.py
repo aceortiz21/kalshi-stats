@@ -26,6 +26,9 @@ class LiveTicker:
     open_interest: float | None
     ts_ms: int
 
+    yes_bid_size: float | None = None
+    yes_ask_size: float | None = None
+
 
 class KalshiTickerWebSocket:
     def __init__(
@@ -155,6 +158,14 @@ class KalshiTickerWebSocket:
         volume_raw = msg.get("volume_fp")
         open_interest_raw = msg.get("open_interest_fp")
 
+        yes_bid_size_raw = msg.get(
+            "yes_bid_size_fp"
+        )
+
+        yes_ask_size_raw = msg.get(
+            "yes_ask_size_fp"
+        )
+
         return LiveTicker(
             market_ticker=market_ticker,
             yes_bid=float(yes_bid_raw),
@@ -177,5 +188,21 @@ class KalshiTickerWebSocket:
             ts_ms=int(
                 msg.get("ts_ms")
                 or int(time.time() * 1000)
+            ),
+
+            yes_bid_size=(
+                None
+                if yes_bid_size_raw is None
+                else float(
+                    yes_bid_size_raw
+                )
+            ),
+
+            yes_ask_size=(
+                None
+                if yes_ask_size_raw is None
+                else float(
+                    yes_ask_size_raw
+                )
             ),
         )
