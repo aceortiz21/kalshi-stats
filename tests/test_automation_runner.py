@@ -370,3 +370,25 @@ def test_docker_build_context_is_deny_by_default():
     assert "!src/**" in rules
     assert "!automation/container/**" in rules
     assert not any(".env" in rule or ".git" in rule for rule in rules[1:])
+
+def test_explicit_usage_limit_is_not_misclassified_as_security_violation():
+    from kalshi_stats.automation_runner import classify_runner_result
+    from kalshi_stats.automation_state import ErrorClassification
+
+    diagnostic = """
+    Reviewer is checking the security boundary.
+    You've hit your usage limit. Purchase more credits or try again at 9:22 PM.
+    """
+
+    assert (
+        classify_runner_result(1, diagnostic)
+        is ErrorClassification.RATE_LIMITED
+    )
+
+    assert (
+        classify_runner_result(
+            1,
+            "Reviewer is checking the security boundary.",
+        )
+        is ErrorClassification.UNKNOWN_FAILURE
+    )

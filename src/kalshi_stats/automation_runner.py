@@ -88,7 +88,15 @@ _INFRASTRUCTURE_FAILURE = re.compile(
     r"no prompt provided via stdin",
     re.I,
 )
-_SECURITY_VIOLATION = re.compile(r"security_violation|security boundary|permission denied by policy", re.I)
+_SECURITY_VIOLATION = re.compile(
+    r"security_violation|permission denied by policy",
+    re.I,
+)
+_USAGE_LIMIT = re.compile(
+    r"you(?:'|’)ve hit your usage limit|purchase more credits|"
+    r"try again at\s+\d{1,2}:\d{2}\s*(?:am|pm)?",
+    re.I,
+)
 _DATABASE_FAILURE = re.compile(
     r"database_integrity_failure|database disk image is malformed|integrity_check.*(?:fail|not ok)",
     re.I,
@@ -655,6 +663,8 @@ def classify_runner_result(
 ) -> ErrorClassification:
     if exit_code == 0 and not timed_out:
         return ErrorClassification.SUCCESS
+    if _USAGE_LIMIT.search(diagnostic_text):
+        return ErrorClassification.RATE_LIMITED
     if _SECURITY_VIOLATION.search(diagnostic_text):
         return ErrorClassification.SECURITY_VIOLATION
     if _DATABASE_FAILURE.search(diagnostic_text):
