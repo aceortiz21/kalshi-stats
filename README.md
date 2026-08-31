@@ -1,196 +1,508 @@
-# Kalshi BTC Statistics Manager
+# Kalshi BTC15M Research System
 
-This project is a real-data research engine for Kalshi's `KXBTC15M` series, titled `BTC price up in next 15 mins?`. It does not place trades or emit buy/sell commands. It pulls data from Kalshi's public API, stores it in SQLite, evaluates scenario definitions, and renders a readable HTML dashboard with historical hit rates and gross scenario P/L statistics.
+A research platform for studying Kalshi's 15-minute Bitcoin
+prediction markets (`KXBTC15M`).
 
-## What data it uses
+The project combines:
 
-Only Kalshi API data is used in the research pipeline:
+- historical market reconstruction,
+- live Kalshi market collection,
+- official BRTI tracking,
+- BTC market features,
+- strategy discovery,
+- chronological historical replay,
+- realistic paper execution,
+- prospective strategy validation,
+- adaptive portfolio research,
+- and, eventually, machine-learning-based probability and
+  execution models.
 
-- settled historical `KXBTC15M` markets
-- 1-minute historical candlesticks where Kalshi exposes them
-- trade history for settled markets
-- live best bid / ask snapshots for current and future markets
+The system is currently **research and paper trading only**.
 
-External BTC reference data is also supported:
+Real-money automated execution is not enabled.
 
-- second-level BTC history from Binance's official public archive when available
-- live BTC point-in-time data from Coinbase for future backlog growth
+---
 
-The market is directional, not fixed-strike. For `KXBTC15M`, `YES` resolves true when BTC's end-of-window benchmark is at least the start-of-window benchmark.
+## Project Goal
 
-## Commands
+The long-term objective is not to find one fixed trading rule.
 
-Initialize the database:
+The goal is to build a continuously learning research system
+that can:
 
-```bash
-PYTHONPATH=src python3 -m kalshi_stats.cli init-db --db data/kalshi_stats.sqlite
-```
+1. observe historical and live BTC/Kalshi data,
+2. generate candidate strategies,
+3. test them without lookahead,
+4. paper trade them with realistic execution assumptions,
+5. determine which apparent edges survive forward validation,
+6. detect changing market regimes,
+7. dynamically choose among sufficiently validated strategies,
+8. pass when no reliable edge exists,
+9. eventually support tightly guarded live execution.
 
-Backfill historical and recent markets from the Kalshi API:
+Historical profitability is never treated as proof of future
+profitability.
 
-```bash
-PYTHONPATH=src python3 -m kalshi_stats.cli backfill --db data/kalshi_stats.sqlite --series KXBTC15M
-```
+---
 
-Pull live quote snapshots for active markets:
+## Core Research Principle
 
-```bash
-PYTHONPATH=src python3 -m kalshi_stats.cli sync-live --db data/kalshi_stats.sqlite --series KXBTC15M
-```
+The project separates:
 
-Pull one live BTC observation:
+DISCOVERY
+    ↓
+HISTORICAL SCREENING
+    ↓
+OUT-OF-SAMPLE TESTING
+    ↓
+PROSPECTIVE PAPER EXECUTION
+    ↓
+EXECUTION ELIGIBILITY
+    ↓
+ACTIVE / PASS
 
-```bash
-PYTHONPATH=src python3 -m kalshi_stats.cli sync-btc --db data/kalshi_stats.sqlite
-```
+Strategies are frozen once created.
 
-Backfill BTC second-level history:
+A strategy cannot be modified using the same forward data that
+is currently evaluating it.
 
-```bash
-PYTHONPATH=src python3 -m kalshi_stats.cli backfill-btc \
-  --db data/kalshi_stats.sqlite \
-  --start-date 2026-06-28 \
-  --end-date 2026-06-29 \
-  --workers 2
-```
+A modified strategy becomes a new version with a new forward
+clock.
 
-Backfill recent settled KXBTC15M trade history:
+---
 
-```bash
-PYTHONPATH=src python3 -m kalshi_stats.cli backfill-recent-trades \
-  --db data/kalshi_stats.sqlite \
-  --series KXBTC15M \
-  --days 1 \
-  --workers 4
-```
+## Current Architecture
 
-Generate the HTML dashboard:
+The system currently contains several major layers.
 
-```bash
-PYTHONPATH=src python3 -m kalshi_stats.cli analyze \
-  --db data/kalshi_stats.sqlite \
-  --scenarios config/scenarios.json \
-  --output reports/dashboard.html
-```
+### Data collection
 
-Continuously update live snapshots and refresh the dashboard every 5 seconds:
+Live and historical data include:
 
-```bash
-PYTHONPATH=src python3 -m kalshi_stats.cli monitor \
-  --db data/kalshi_stats.sqlite \
-  --scenarios config/scenarios.json \
-  --output reports/dashboard.html \
-  --series KXBTC15M \
-  --interval 5
-```
+- Kalshi KXBTC15M market prices,
+- bid/ask quotes,
+- top-of-book size,
+- official Kalshi BRTI,
+- BTC spot/reference data,
+- synchronized feature snapshots,
+- completed market outcomes.
 
-Print the generic price/time matrix in the terminal:
+Feature snapshots include variables such as:
 
-```bash
-PYTHONPATH=src python3 -m kalshi_stats.cli matrix --db data/kalshi_stats.sqlite
-```
+- seconds remaining,
+- contract price,
+- BTC distance from threshold,
+- threshold distance in dollars/bps/volatility units,
+- 30s / 60s / 180s / 300s returns,
+- EMA spreads,
+- EMA slopes,
+- VWAP distances,
+- realized volatility,
+- ranges,
+- volume / relative volume,
+- trade imbalance,
+- book imbalance.
 
-Serve the dashboard locally:
+### Strategy research
 
-```bash
-PYTHONPATH=src python3 -m kalshi_stats.cli serve --host 127.0.0.1 --port 8000
-```
+Current strategy families include:
 
-## Handoff Status
+MAIN_TRIGGER
+MAIN_CONTEXT
+MICRO_MULTIPLIER
+GRID_V1
+TAIL_V1
 
-Status snapshot from the current workspace:
+`GRID_V1` provides broad combinations of:
 
-- database: [`data/kalshi_stats.sqlite`](/home/aceortiz/stats/data/kalshi_stats.sqlite)
-- dashboard: [`reports/dashboard.html`](/home/aceortiz/stats/reports/dashboard.html)
-- scenario config: [`config/scenarios.json`](/home/aceortiz/stats/config/scenarios.json)
-- analysis/report entrypoint: [`src/kalshi_stats/cli.py`](/home/aceortiz/stats/src/kalshi_stats/cli.py)
+- contract-price ranges,
+- time-remaining ranges,
+- TP/SL rules,
+- settlement exits.
 
-Current dataset state last verified on Sunday, August 30, 2026:
+`TAIL_V1` extends experiments into extreme low- and high-priced
+contracts.
 
-- `24,518` total `KXBTC15M` markets stored
-- `24,407` settled markets stored
-- `316` settled markets with stored trade history
-- `126` settled markets with stored 1-minute candlestick history
-- `3,796,527` total Kalshi trades stored
-- `172,801` BTC second-level rows stored
-- `32` live quote snapshots
-- latest verified live snapshot stored at `2026-08-30T00:16:14Z`
-- verified BTC second-level archive currently covers June 28, 2026 through June 29, 2026, plus one live Coinbase tick collected on Sunday, August 30, 2026
+The challenger generator can create additional frozen strategy
+versions when research identifies an interesting subdivision.
 
-Current configured scenarios and occurrence counts from the stored database:
+---
 
-- `early_20s_rebound`: `156`
-- `teens_comeback`: `245`
-- `single_digit_resurrection`: `217`
-- `favorite_fade_80s`: `55`
-- `full_flip_from_20s`: `245`
-- `late_underdog_comeback`: `220`
+## Historical Replay
 
-Important current limitation:
+Historical replay is implemented in:
 
-- The market table is large because `GET /markets` includes many future precreated `KXBTC15M` markets. Historical analysis currently uses settled markets only, so the useful research count is the settled count above.
-- Kalshi public API history is not true second-by-second for old markets. Historical analysis is based on Kalshi candles where available and otherwise trade prints, and only complete-enough trade histories are used in scenario analysis.
-- Live Binance REST access was blocked in this environment on Sunday, August 30, 2026, so live BTC collection currently uses Coinbase while historical BTC second-level backlog uses Binance archive files.
-- For future accuracy, keep `monitor` running during trading so your own live KXBTC15M snapshots and BTC observations accumulate going forward.
+src/kalshi_stats/historical_replay.py
 
-Recommended next engineering steps:
+It walks historical market observations chronologically.
 
-1. Continue recent-trade backfill for additional settled days until the complete-history count is much larger than `316`.
-2. Add explicit fee-aware net P/L metrics instead of gross target P/L only.
-3. Add BTC-path-driven scenarios using the local `btc_1s` table.
-4. Add scenario families grouped by time bucket, especially `10s_but_wins_by_time_bucket` and `first_1m_3m_5m_favorite_accuracy`.
-5. Auto-refresh the local HTTP dashboard while `monitor` is running.
+A simulated strategy decision may only use information that
+existed at that timestamp.
 
-## Dashboard contents
+Settlement outcomes are not used to make entry decisions.
 
-The report at [`reports/dashboard.html`](/home/aceortiz/stats/reports/dashboard.html) includes:
+Historical replay is used for:
 
-- an active market board for all current KXBTC15M sides with their current price/time bucket statistics
-- a live scenario board for current active KXBTC15M markets
-- a historical scenario matrix with occurrence counts, win rates, target-hit rates, and average gross P/L by target
-- a generic price-by-time matrix for the whole dataset
+- strategy screening,
+- discovering leads,
+- studying payoff structure,
+- preparing prospective experiments.
 
-How to use the dashboard:
+Historical replay does **not** count as prospective proof.
 
-- Open [`reports/dashboard.html`](/home/aceortiz/stats/reports/dashboard.html) in a browser, or run `serve` and open `http://127.0.0.1:8000/reports/dashboard.html`.
-- Start at `Active Market Board` to compare every live YES/NO side against the historical price/time matrix.
-- Use `Live Scenario Board` to see whether any active `KXBTC15M` market currently matches one of your named triggers.
-- Move to `Scenario Matrix` to compare historical win rate, target hit rate, and average gross P/L for each scenario.
-- Use `Price × Time Matrix` when you want a more generic answer such as “what usually happens after 24c with 8 minutes left?” even if no named scenario exactly matches.
-- Interpret the dashboard as a probability reference, not an execution engine. It is meant to support your judgment, not replace it.
+Known historical replay limitations include:
 
-## Historical accuracy notes
+- no true historical full-depth order book,
+- no true historical IOC latency,
+- no historical queue position,
+- simplified execution assumptions,
+- estimated fees.
 
-There is one important limit from the Kalshi API itself:
+---
 
-- For past markets, the best structured intramarket history available is the Kalshi candlestick/trade history. That means historical scenario detection is minute-candle based when candles exist, and otherwise trade-print based.
-- For current and future markets, this project records your own live quote snapshots continuously, so those markets become higher resolution from the moment the tracker is running.
-- Kalshi's public market API does not expose the full intramarket BTC benchmark path directly in the same way it exposes contract price history, so this project currently analyzes contract behavior rather than a second-by-second BTC spot path.
+## PaperBroker
 
-## Default scenarios
+The realistic live paper execution engine is implemented in:
 
-The starter config in [`config/scenarios.json`](/home/aceortiz/stats/config/scenarios.json) includes:
+src/kalshi_stats/paper_broker.py
 
-- early 20s rebound
-- teens comeback
-- single-digit resurrection
-- favorite fade from the 80s
-- full flip from the 20s
-- late underdog comeback
+The design goal is:
 
-## Strong next scenarios to add
+strategy
+   ↓
+trade intent
+   ↓
+execution engine
+   ↓
+PaperBroker
 
-- `10s_but_wins_by_time_bucket`
-- `single_digits_to_30_or_40`
-- `favorite_90s_failure`
-- `multiple_lead_changes`
-- `first_1m_3m_5m_favorite_accuracy`
-- `boundary_volatility_between_contracts`
-- `kalshi_price_vs_recent_direction`
-- `late_80s_or_90s_failure`
+with a future real broker using the same trading intent and
+risk logic.
 
-## Sources
+Current PaperBroker behavior includes:
 
-- Kalshi historical data overview: https://docs.kalshi.com/getting_started/historical_data
-- Kalshi market API reference: https://docs.kalshi.com/api-reference/market/get-markets
-- Binance official public data repository: https://data.binance.vision/
+- approximately $1 paper trade notional per signal,
+- approximately $10 virtual starting bankroll per experimental
+  strategy,
+- IOC-style entry limits,
+- observed best-price liquidity constraints,
+- partial fills,
+- TP handling,
+- stop triggering,
+- gap/slippage handling,
+- settlement of residual positions,
+- fee estimates,
+- per-strategy virtual accounting.
+
+Each strategy bankroll is an independent research experiment.
+
+The sum of all strategy bankrolls is **not** one deployable
+portfolio.
+
+---
+
+## Paper Snapshot
+
+The full PaperBroker research state can be exported with:
+
+./snapshot.sh
+
+This writes:
+
+reports/paper_engine_snapshot.json
+
+The snapshot contains:
+
+- all registered strategies,
+- paper accounts,
+- paper trades,
+- fills,
+- no-fill diagnostics,
+- current score snapshots,
+- market results,
+- signal-time feature context,
+- scan cursors.
+
+This is the preferred file for analyzing the entire live paper
+experiment.
+
+---
+
+## Current Execution Findings
+
+Observed live paper execution has shown that many `NO_FILL`
+events occur because:
+
+PRICE_MOVED_ABOVE_IOC_LIMIT
+
+A common pattern is:
+
+signal ask
+    ↓
+~hundreds of milliseconds
+    ↓
+ask has moved roughly one tick higher
+    ↓
+strict IOC refuses to chase
+
+Multiple strategies often share the same entry condition, so
+many strategy-level `NO_FILL` rows may represent one underlying
+market/side execution episode.
+
+Always distinguish:
+
+strategy rows
+unique markets
+unique market/side episodes
+
+Larger future trade sizes will require stronger liquidity and
+depth modeling.
+
+---
+
+## Adaptive Portfolio Research
+
+The project also includes historical walk-forward adaptive
+portfolio experiments.
+
+### Adaptive V1
+
+Adaptive V1 ranked strategies largely using historical ROI.
+
+It failed badly because binary-market returns are highly
+asymmetric.
+
+Cheap contracts can generate rare enormous percentage wins,
+causing mean ROI to look much more reliable than it really is.
+
+### Adaptive V2
+
+Adaptive V2 uses Bayesian settlement-probability estimates and
+fee-adjusted breakeven probabilities.
+
+At high portfolio risk, it still produced unacceptable
+drawdowns.
+
+At approximately 1% bankroll risk per selected trade,
+historical walk-forward results were much safer.
+
+Example research result:
+
+BAYES_FAST
+start           ~$10
+finish          ~$12.18
+historical ROI  ~+21.8%
+max drawdown    ~23.4%
+
+This remains retrospective research evidence only.
+
+Performance was strongly regime-dependent, motivating the next
+research layer.
+
+---
+
+## Planned Machine Learning Layer
+
+The next major research phase is intended to estimate market
+probabilities directly rather than only choosing from manually
+defined strategies.
+
+Initial ML benchmark:
+
+historical observable features
+          ↓
+probability model
+          ↓
+P(YES) / P(NO)
+          ↓
+compare with Kalshi price
+          ↓
+fee-adjusted estimated edge
+
+The first models should be:
+
+1. logistic regression,
+2. gradient-boosted decision trees.
+
+Validation must be chronological.
+
+Random train/test splits must not be used for time-series
+performance claims.
+
+Important metrics include:
+
+- Brier score,
+- log loss,
+- calibration,
+- probability error,
+- market-relative edge,
+- fee-adjusted expected value.
+
+Possible later research includes:
+
+- regime/change-point detection,
+- online learning,
+- expert weighting,
+- contextual bandits,
+- execution/fill prediction,
+- slippage modeling,
+- evolutionary challenger generation.
+
+Reinforcement learning is intentionally deferred until the
+execution simulator is substantially more realistic.
+
+---
+
+## Research Agent Direction
+
+A future repository-level research agent may help automate:
+
+observe
+  ↓
+analyze
+  ↓
+propose experiment
+  ↓
+backtest
+  ↓
+walk-forward validation
+  ↓
+tests
+  ↓
+prospective paper validation
+  ↓
+report
+
+The agent may assist development and research.
+
+It must not be allowed to silently:
+
+- weaken risk controls,
+- change promotion standards,
+- expose private credentials,
+- enable live-money execution,
+- promote a backtest directly to production.
+
+Research autonomy and trading authority should remain separate.
+
+---
+
+## Running the System
+
+Activate the project environment and launch the supervised
+processes with:
+
+cd ~/stats
+./start.sh
+
+The launcher starts the project's live collectors, research
+processes, dashboard generation, strategy tracking, and
+PaperBroker components.
+
+The exact processes should be verified against the current
+`start.sh`, because this project evolves frequently.
+
+---
+
+## Tests
+
+Run the complete test suite with:
+
+cd ~/stats
+
+PYTHONPATH=src .venv/bin/python \
+  -m compileall -q src tests
+
+PYTHONPATH=src .venv/bin/python \
+  -m pytest -q
+
+bash -n start.sh
+bash -n snapshot.sh
+
+git diff --check
+
+Do not commit research-engine changes while tests are failing.
+
+---
+
+## Database
+
+Primary live/research SQLite database:
+
+data/kalshi_stats_snapshot.sqlite
+
+For heavy historical research, prefer a SQLite backup rather
+than stressing the live database:
+
+rm -f /tmp/kalshi_historical_replay.sqlite
+
+sqlite3 \
+  data/kalshi_stats_snapshot.sqlite \
+  ".backup '/tmp/kalshi_historical_replay.sqlite'"
+
+Then use the frozen copy for historical replay/model training.
+
+---
+
+## Important Files
+
+Common entry points include:
+
+src/kalshi_stats/database.py
+src/kalshi_stats/market_sync.py
+src/kalshi_stats/live_monitor.py
+src/kalshi_stats/kalshi_api.py
+src/kalshi_stats/kalshi_account.py
+src/kalshi_stats/kalshi_ws.py
+
+src/kalshi_stats/paper_broker.py
+src/kalshi_stats/paper_snapshot.py
+
+src/kalshi_stats/strategy_zoo.py
+src/kalshi_stats/tail_zoo.py
+src/kalshi_stats/challenger_generator.py
+
+src/kalshi_stats/historical_replay.py
+src/kalshi_stats/historical_adaptive.py
+src/kalshi_stats/historical_adaptive_v2.py
+
+src/kalshi_stats/reporting.py
+src/kalshi_stats/health.py
+
+See:
+
+AGENTS.md
+docs/RESEARCH_SYSTEM.md
+
+for the detailed scientific and agent-development rules.
+
+---
+
+## Safety / Credentials
+
+Never commit:
+
+- private keys,
+- API secrets,
+- `.env` credentials.
+
+Read-only and write-capable Kalshi access should remain
+architecturally separate.
+
+Real-money automated execution is currently disabled.
+
+---
+
+## Research Status
+
+The system is actively accumulating prospective evidence.
+
+No strategy should currently be interpreted as guaranteed
+profitable.
+
+A valid research outcome is:
+
+No demonstrated edge under the tested execution constraints.
+
+The purpose of this project is to discover whether robust edge
+exists, not to force a profitable conclusion.
