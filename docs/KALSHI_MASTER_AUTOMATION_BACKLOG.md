@@ -1,0 +1,247 @@
+# Kalshi BTC15M — Master Automation Backlog
+
+## Current state
+
+- **Active:** `telegram-remote-control-v1` — attempt 4, waiting for Codex quota; expected to resume automatically.
+- **Real money:** disabled.
+- **`main`:** human-only.
+
+## Completed foundations
+
+- [x] Core KXBTC15M historical/live data collection and dashboard foundation
+- [x] Coinbase BTC second-level/live feature collection
+- [x] BRTI collection and synchronized market feature snapshots
+- [x] Strategy zoo / TAIL_V1 / challenger infrastructure
+- [x] Historical replay and adaptive research foundations
+- [x] PaperBroker / Shadow Lab / prospective logging runtime
+- [x] Automation Phase A durable state/policies
+- [x] Automation Phase B isolated Codex container runner
+- [x] Phase C1 authenticated canary and worktree lifecycle
+- [x] Phase C2A quota pause/resume
+- [x] Phase C2B durable queue/worker/context rollover
+- [x] Phase C3 mechanical validation + independent reviewer + repair pipeline
+- [x] C3 validator PYTHONPATH/worktree import fix
+- [x] Codex usage-limit classification fix (RATE_LIMITED instead of false SECURITY_VIOLATION)
+
+## Queue / roadmap
+
+- [-] **URGENT** — `telegram-remote-control-v1` — Telegram remote control and notifications V1
+  - Status: IN_PROGRESS_WAITING_FOR_QUOTA
+  - Scope: Existing task. Finish C3 validation/review after quota reset. No duplicate submission.
+- [ ] **URGENT** — `automation-control-integration-v1` — Checkpoint and stabilize automation control plane
+  - Status: PENDING
+  - Depends on: `telegram-remote-control-v1`
+  - Scope: Checkpoint the C3-approved Telegram implementation, integrate a stable automation-control baseline, preserve main as human-only, and eliminate the temporary manual C3SRC/PYTHONPATH dependency.
+- [ ] **URGENT** — `telegram-host-activation-v1` — Activate Telegram controller on host
+  - Status: PENDING
+  - Depends on: `automation-control-integration-v1`
+  - Scope: Use the existing host-only telegram.env without printing secrets; start automationctl; smoke-test commands and transition notifications.
+- [ ] **URGENT** — `telegram-safe-task-submit-v1` — Safe Telegram development task submission
+  - Status: PENDING
+  - Depends on: `telegram-host-activation-v1`
+  - Scope: Add a bounded /build or equivalent that creates a reviewed task specification and submits it through C3. Never expose arbitrary shell/exec/file/process access.
+- [ ] **HIGH** — `automation-status-watcher-v1` — Generic automation job status watcher
+  - Status: PENDING
+  - Depends on: `telegram-host-activation-v1`
+  - Scope: Monitor any automation/research job, detect state changes, quota waits/resumes, stalls, failures, worker death and human-required states; send deduplicated Telegram updates.
+- [ ] **HIGH** — `runtime-supervisor-v1` — Kalshi runtime health supervisor
+  - Status: PENDING
+  - Depends on: `telegram-host-activation-v1`
+  - Scope: Supervise only known start.sh/runtime components, report health, detect dead/stale processes, and perform bounded recovery. No arbitrary PID control and no live-money enablement.
+- [ ] **HIGH** — `controlled-research-deployment-v1` — Controlled research deployment
+  - Status: PENDING
+  - Depends on: `runtime-supervisor-v1`, `automation-control-integration-v1`
+  - Scope: Create a validated path from C3-approved task branches into the research runtime without autonomous main merges, live credentials, or silent rollback loss.
+- [ ] **HIGH** — `project-brain-v1` — Durable project brain and state reconstruction
+  - Status: PENDING
+  - Depends on: `automation-control-integration-v1`
+  - Scope: Maintain PROJECT_STATE.md, RESEARCH_HISTORY.md, DECISIONS.md, CURRENT_PRIORITIES.md, SYSTEM_HEALTH.json and compact task/history summaries.
+- [ ] **HIGH** — `unattended-reporting-v1` — Unattended automation and research reports
+  - Status: PENDING
+  - Depends on: `project-brain-v1`, `automation-status-watcher-v1`
+  - Scope: Generate concise periodic/on-completion reports covering completed work, failures, rejected hypotheses, health, queue state and recommended next action; deliver through Telegram when appropriate.
+- [ ] **HIGH** — `telegram-natural-language-router-v1` — Telegram natural-language intent router
+  - Status: PENDING
+  - Depends on: `telegram-safe-task-submit-v1`, `project-brain-v1`
+  - Scope: Map conversational requests only to strict safe tools and bounded tasks; never give the LLM arbitrary shell authority.
+- [ ] **HIGH** — `research-planner-v1` — Autonomous bounded research planner
+  - Status: PENDING
+  - Depends on: `telegram-safe-task-submit-v1`, `project-brain-v1`, `controlled-research-deployment-v1`
+  - Scope: Turn current evidence into bounded research proposals/tasks, preserve negative evidence and chronology, and never promote historical results directly to execution.
+- [ ] **HIGH** — `automation-soak-test-v1` — Unattended automation soak test
+  - Status: PENDING
+  - Depends on: `automation-status-watcher-v1`, `runtime-supervisor-v1`, `unattended-reporting-v1`
+  - Scope: Run an extended unattended soak with quota waits, network interruptions, worker restarts, multiple queued tasks and reviewer cycles; verify no state corruption, secret leakage or unauthorized runtime/main changes.
+- [ ] **NORMAL** — `startup-recovery-v1` — Windows WSL Docker startup recovery
+  - Status: PENDING
+  - Depends on: `automation-soak-test-v1`
+  - Scope: After ordinary reboot/sign-in, recover Docker Desktop/WSL controller, worker and supervised runtime safely; fail closed if ownership/task state is ambiguous.
+- [ ] **NORMAL** — `proactive-telegram-operator-v1` — Proactive Telegram project operator
+  - Status: PENDING
+  - Depends on: `telegram-natural-language-router-v1`, `research-planner-v1`, `unattended-reporting-v1`
+  - Scope: Send concise project updates, recommend the best next bounded action, accept plain-English redirects/approval, and preserve human checkpoints for sensitive/live-risk changes.
+- [ ] **HIGH** — `paper-snapshot-modularization-v1` — Modular paper snapshot and compact diagnostics
+  - Status: PENDING
+  - Depends on: `controlled-research-deployment-v1`
+  - Scope: Modularize snapshot reporting into paper leaderboard, accounts, trades, anomalies, shadow summary, runtime health, metadata and a compact paper report.
+- [ ] **HIGH** — `paper-tail-diagnostics-v1` — TAIL_V1 convexity and concentration diagnostics
+  - Status: PENDING
+  - Depends on: `paper-snapshot-modularization-v1`
+  - Scope: Analyze cheap-tail winners/losses/no-fills, independent episodes, depth/execution and concentration; flag low-win/high-return tails instead of treating aggregate equity as proof.
+- [ ] **HIGH** — `episode-dedup-statistics-v1` — Independent market episode statistics
+  - Status: PENDING
+  - Depends on: `paper-snapshot-modularization-v1`
+  - Scope: Report strategy rows separately from unique markets and unique market/side episodes; add cluster-aware confidence intervals.
+- [ ] **HIGH** — `promotion-evidence-framework-v1` — Strategy promotion evidence framework
+  - Status: PENDING
+  - Depends on: `episode-dedup-statistics-v1`, `project-brain-v1`
+  - Scope: Encode RESEARCH -> HISTORICAL LEAD -> OOS PASS -> PROSPECTIVE EXECUTION PASS -> EXECUTION ELIGIBLE -> ACTIVE/DEGRADED with immutable versions and fresh forward clocks.
+- [ ] **HIGH** — `data-coverage-audit-v1` — Historical and live data coverage audit
+  - Status: PENDING
+  - Depends on: `controlled-research-deployment-v1`
+  - Scope: Quantify and improve usable KXBTC15M trade history, candles, BTC second-level data, synchronized snapshots and BRTI coverage; preserve visible gaps.
+- [ ] **HIGH** — `frozen-research-db-v1` — Frozen research database snapshots and integrity checks
+  - Status: PENDING
+  - Depends on: `data-coverage-audit-v1`
+  - Scope: Automate safe SQLite backup/frozen training copies, integrity checks and metadata so heavy research does not stress or mutate the live research database.
+- [ ] **HIGH** — `feature-leakage-audit-v1` — Feature whitelist and leakage audit
+  - Status: PENDING
+  - Depends on: `frozen-research-db-v1`
+  - Scope: Enforce explicit historical feature whitelists, T-1s/timestamp safety and settlement-label availability; scan result/settlement/future-derived fields for leakage.
+- [ ] **HIGH** — `multiple-testing-controls-v1` — Multiple-testing and correlation controls
+  - Status: PENDING
+  - Depends on: `episode-dedup-statistics-v1`
+  - Scope: Add cluster/bootstrap and false-discovery-aware evaluation for hundreds of correlated strategy variants; preserve negative evidence.
+- [ ] **NORMAL** — `fee-model-audit-v1` — Kalshi fee-model audit
+  - Status: PENDING
+  - Depends on: `paper-snapshot-modularization-v1`
+  - Scope: Validate the paper fee approximation and make net rather than gross EV the default research output.
+- [ ] **HIGH** — `phase3a-label-quality-v1` — Phase3A action-label quality repair
+  - Status: PENDING
+  - Depends on: `feature-leakage-audit-v1`
+  - Scope: Address the known resolved/ambiguous split and non-random missing stop P&L before action ML; document usable/censored/excluded labels.
+- [ ] **HIGH** — `phase3b-action-ml-v1` — Phase3B action ML benchmark
+  - Status: PENDING
+  - Depends on: `phase3a-label-quality-v1`, `multiple-testing-controls-v1`
+  - Scope: Resume action modeling using chronology-safe data, PASS/no-trade, strict holdouts, calibration and fee/execution-aware metrics.
+- [ ] **NORMAL** — `settlement-calibration-refresh-v1` — Settlement probability calibration baseline refresh
+  - Status: PENDING
+  - Depends on: `feature-leakage-audit-v1`
+  - Scope: Re-run simple interpretable settlement-probability baselines only as calibration references; preserve the prior failure to robustly beat raw Kalshi unless new evidence changes it.
+- [ ] **HIGH** — `btc-direction-model-v1` — BTC direction model
+  - Status: PENDING
+  - Depends on: `feature-leakage-audit-v1`, `data-coverage-audit-v1`
+  - Scope: Chronologically model near-term BTC direction from contemporaneous returns, EMA/VWAP, volume, imbalance, volatility and threshold context; evaluate calibration, not raw accuracy alone.
+- [ ] **HIGH** — `btc-path-models-v1` — BTC magnitude volatility and path models
+  - Status: PENDING
+  - Depends on: `btc-direction-model-v1`
+  - Scope: Model movement magnitude, volatility/path and threshold-crossing behavior, not just direction.
+- [ ] **HIGH** — `regime-detection-v1` — Regime and change-point detection
+  - Status: PENDING
+  - Depends on: `btc-direction-model-v1`, `phase3b-action-ml-v1`
+  - Scope: Evaluate rolling/decayed evidence, volatility/momentum/calibration regimes and change-point methods to reduce stale lifetime evidence.
+- [ ] **HIGH** — `microstructure-feature-layer-v1` — Trade aggressor and microstructure feature layer
+  - Status: PENDING
+  - Depends on: `data-coverage-audit-v1`
+  - Scope: Add/validate aggressor flow, quote velocity, spread, top-book size, order-book imbalance, relative volume and timestamp-safe microstructure features.
+- [ ] **HIGH** — `full-depth-orderbook-v1` — Full-depth order-book reconstruction
+  - Status: PENDING
+  - Depends on: `microstructure-feature-layer-v1`
+  - Scope: Reconstruct full depth prospectively where possible, with price levels, size, partial fills and book state so larger sizing is not modeled as repeated $1 fills.
+- [ ] **NORMAL** — `timestamp-safe-events-v1` — Timestamp-safe news and event context
+  - Status: PENDING
+  - Depends on: `feature-leakage-audit-v1`
+  - Scope: Design external event/news features only when source timestamps and availability can be proven at decision time.
+- [ ] **HIGH** — `kalshi-repricing-lag-v1` — Kalshi repricing and mispricing research
+  - Status: PENDING
+  - Depends on: `btc-path-models-v1`, `microstructure-feature-layer-v1`
+  - Scope: Measure whether/when Kalshi quotes lag BTC/BRTI/microstructure changes, distinguish true executable edge from UI/display lag, and evaluate after fees/fill probability.
+- [ ] **HIGH** — `execution-policy-experiments-v1` — Prospective entry execution-policy experiments
+  - Status: PENDING
+  - Depends on: `paper-tail-diagnostics-v1`, `microstructure-feature-layer-v1`
+  - Scope: Prospectively compare STRICT signal-ask IOC, +1 tick, +2 ticks and brief passive policies on fill rate, slippage, missed winners, avoided losers, fees and net P&L.
+- [ ] **HIGH** — `fill-slippage-model-v1` — Fill and slippage prediction model
+  - Status: PENDING
+  - Depends on: `execution-policy-experiments-v1`, `full-depth-orderbook-v1`
+  - Scope: Estimate P(fill), fill percentage, entry slippage and time-to-fill from prospective PaperBroker observations.
+- [ ] **HIGH** — `meta-selector-pass-v1` — Meta-selector with PASS action
+  - Status: PENDING
+  - Depends on: `phase3b-action-ml-v1`, `regime-detection-v1`, `fill-slippage-model-v1`, `kalshi-repricing-lag-v1`
+  - Scope: Select among sufficiently validated strategies/models using conservative net EV and allow PASS whenever evidence is insufficient.
+- [ ] **NORMAL** — `expert-weighting-bandit-v1` — Expert weighting and contextual selection
+  - Status: PENDING
+  - Depends on: `meta-selector-pass-v1`
+  - Scope: Compare Hedge/exponential weighting, Bayesian model averaging and contextual-bandit-style selection using only matured evidence; keep deep RL deferred.
+- [ ] **HIGH** — `prospective-experiment-factory-v1` — Frozen challenger and prospective experiment factory
+  - Status: PENDING
+  - Depends on: `promotion-evidence-framework-v1`, `research-planner-v1`
+  - Scope: Create immutable candidate versions with discovery cutoff/forward start, register for shadow/paper evaluation, and report promotion/retirement without silently retuning parents.
+- [ ] **HIGH** — `candidate-80-89c-3-5m-v1` — Freeze and prospectively test 80-89c 3-5m TP15 SL5 lead
+  - Status: PENDING
+  - Depends on: `prospective-experiment-factory-v1`, `multiple-testing-controls-v1`
+  - Scope: Treat the previously strong discovery/holdout result as a frozen prospective candidate, not proof; track independent episodes, fees, fills and forward performance.
+- [ ] **NORMAL** — `hypothesis-early-skew-reversion-v1` — Early price-skew reversion hypothesis
+  - Status: PENDING
+  - Depends on: `prospective-experiment-factory-v1`
+  - Scope: Test early 15-minute contract skews/reversion with predeclared rules and chronology-safe evidence.
+- [ ] **NORMAL** — `hypothesis-deep-underdog-flips-v1` — Deep underdog flip hypothesis
+  - Status: PENDING
+  - Depends on: `prospective-experiment-factory-v1`
+  - Scope: Study very low-priced contracts that later win, including base rates, path, liquidity, tail concentration and executable EV.
+- [ ] **NORMAL** — `hypothesis-last-minute-spikes-v1` — Last-minute spike without threshold-cross hypothesis
+  - Status: PENDING
+  - Depends on: `btc-path-models-v1`, `prospective-experiment-factory-v1`
+  - Scope: Quantify 1-2 minute BTC spikes that often fail to clear the contract threshold and determine whether price/path features add predictive value.
+- [ ] **NORMAL** — `hypothesis-rollover-jumps-v1` — 15-minute boundary jump hypothesis
+  - Status: PENDING
+  - Depends on: `btc-path-models-v1`, `data-coverage-audit-v1`
+  - Scope: Test whether real BTC movement changes around KXBTC15M contract boundaries, controlling for ordinary clock-time effects and post-hoc selection.
+- [ ] **NORMAL** — `hypothesis-late-extremes-v1` — Late extreme-price hypothesis
+  - Status: PENDING
+  - Depends on: `paper-tail-diagnostics-v1`, `prospective-experiment-factory-v1`
+  - Scope: Study late extreme prices such as ~4c with ~1 minute left using executable fills, threshold distance and tail-risk diagnostics.
+- [ ] **NORMAL** — `indicator-confirmation-research-v1` — EMA VWAP momentum MACD confirmation research
+  - Status: PENDING
+  - Depends on: `btc-direction-model-v1`, `prospective-experiment-factory-v1`
+  - Scope: Quantify whether chart signals used manually add out-of-sample information beyond price/time/threshold context.
+- [ ] **LOW** — `live-chart-indicator-ui-v1` — Live BTC and Kalshi chart with research indicators
+  - Status: PENDING
+  - Depends on: `indicator-confirmation-research-v1`, `runtime-supervisor-v1`
+  - Scope: Improve the dashboard with a live chart and validated indicators/context; keep UI separate from evidence-generation logic.
+- [ ] **HIGH** — `paper-execution-fidelity-v2` — Paper execution fidelity V2
+  - Status: PENDING
+  - Depends on: `full-depth-orderbook-v1`, `fill-slippage-model-v1`, `fee-model-audit-v1`
+  - Scope: Improve latency, depth, queue uncertainty, partial fills, stop gaps and fee realism while preserving approximation limits.
+- [ ] **HIGH** — `finite-bankroll-portfolio-v1` — Finite bankroll portfolio and risk model
+  - Status: PENDING
+  - Depends on: `meta-selector-pass-v1`, `paper-execution-fidelity-v2`
+  - Scope: Replace the misleading sum of independent $10 experiment accounts with a single finite bankroll simulation, conservative sizing, exposure limits and drawdown controls.
+- [ ] **NORMAL** — `shadow-demo-broker-interface-v1` — Shadow demo live broker interface separation
+  - Status: GATED_FUTURE
+  - Depends on: `finite-bankroll-portfolio-v1`, `promotion-evidence-framework-v1`
+  - Scope: Define common trade-intent/broker interfaces with strictly separated SHADOW/PAPER/DEMO/LIVE credentials and no live writes enabled.
+- [ ] **LOW** — `live-executor-disabled-v1` — Live executor implementation disabled by default
+  - Status: GATED_FUTURE
+  - Depends on: `shadow-demo-broker-interface-v1`, `paper-execution-fidelity-v2`
+  - Scope: Only after strong prospective evidence, implement an isolated live execution adapter with live order submission still disabled and impossible to enable implicitly.
+- [ ] **LOW** — `live-risk-kill-switch-v1` — Live risk engine reconciliation and kill switch
+  - Status: GATED_FUTURE
+  - Depends on: `live-executor-disabled-v1`
+  - Scope: Add hard per-trade/daily/exposure caps, idempotent order handling, position/order reconciliation, audit trail and emergency pause/kill behavior. Raising caps remains a human checkpoint.
+- [ ] **LOW** — `micro-live-penny-trial-v1` — Human-authorized micro-live penny trial
+  - Status: HUMAN_GATE_ONLY
+  - Depends on: `live-risk-kill-switch-v1`
+  - Scope: Do not execute automatically. Eligible only after repeated prospective/paper evidence supports positive net EV and the user explicitly authorizes a tiny live trial.
+- [ ] **LOW** — `evidence-based-scale-ladder-v1` — Evidence-based live scaling ladder
+  - Status: HUMAN_GATE_ONLY
+  - Depends on: `micro-live-penny-trial-v1`
+  - Scope: Scale only after repeated real net-positive evidence, stable execution/reconciliation and explicit human approval; no automatic risk-cap increases.
+
+## Explicitly excluded / gated
+
+- Generic AutoDev / zero-supervision software-development product commercialization (deferred until the Kalshi system is strong).
+- Any automatic merge to main.
+- Any arbitrary Telegram /shell or /exec capability.
+- Any automatic creation or use of full-access Kalshi live credentials.
+- Any automatic live-money activation or risk-cap increase.
+- Deep RL before execution simulator fidelity is materially stronger.

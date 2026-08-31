@@ -1,0 +1,594 @@
+{
+  "generated_for": "Kalshi BTC15M master automation backlog",
+  "current_state": {
+    "active_task": "telegram-remote-control-v1",
+    "active_note": "Attempt 4 is waiting for Codex quota and should resume automatically when quota is available.",
+    "real_money_execution": "DISABLED",
+    "main_branch_policy": "human-only"
+  },
+  "completed_foundations": [
+    "Core KXBTC15M historical/live data collection and dashboard foundation",
+    "Coinbase BTC second-level/live feature collection",
+    "BRTI collection and synchronized market feature snapshots",
+    "Strategy zoo / TAIL_V1 / challenger infrastructure",
+    "Historical replay and adaptive research foundations",
+    "PaperBroker / Shadow Lab / prospective logging runtime",
+    "Automation Phase A durable state/policies",
+    "Automation Phase B isolated Codex container runner",
+    "Phase C1 authenticated canary and worktree lifecycle",
+    "Phase C2A quota pause/resume",
+    "Phase C2B durable queue/worker/context rollover",
+    "Phase C3 mechanical validation + independent reviewer + repair pipeline",
+    "C3 validator PYTHONPATH/worktree import fix",
+    "Codex usage-limit classification fix (RATE_LIMITED instead of false SECURITY_VIOLATION)"
+  ],
+  "tasks": [
+    {
+      "task_id": "telegram-remote-control-v1",
+      "title": "Telegram remote control and notifications V1",
+      "priority": "URGENT",
+      "status": "IN_PROGRESS_WAITING_FOR_QUOTA",
+      "depends_on": [],
+      "scope": "Existing task. Finish C3 validation/review after quota reset. No duplicate submission."
+    },
+    {
+      "task_id": "automation-control-integration-v1",
+      "title": "Checkpoint and stabilize automation control plane",
+      "priority": "URGENT",
+      "status": "PENDING",
+      "depends_on": [
+        "telegram-remote-control-v1"
+      ],
+      "scope": "Checkpoint the C3-approved Telegram implementation, integrate a stable automation-control baseline, preserve main as human-only, and eliminate the temporary manual C3SRC/PYTHONPATH dependency."
+    },
+    {
+      "task_id": "telegram-host-activation-v1",
+      "title": "Activate Telegram controller on host",
+      "priority": "URGENT",
+      "status": "PENDING",
+      "depends_on": [
+        "automation-control-integration-v1"
+      ],
+      "scope": "Use the existing host-only telegram.env without printing secrets; start automationctl; smoke-test commands and transition notifications."
+    },
+    {
+      "task_id": "telegram-safe-task-submit-v1",
+      "title": "Safe Telegram development task submission",
+      "priority": "URGENT",
+      "status": "PENDING",
+      "depends_on": [
+        "telegram-host-activation-v1"
+      ],
+      "scope": "Add a bounded /build or equivalent that creates a reviewed task specification and submits it through C3. Never expose arbitrary shell/exec/file/process access."
+    },
+    {
+      "task_id": "automation-status-watcher-v1",
+      "title": "Generic automation job status watcher",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "telegram-host-activation-v1"
+      ],
+      "scope": "Monitor any automation/research job, detect state changes, quota waits/resumes, stalls, failures, worker death and human-required states; send deduplicated Telegram updates."
+    },
+    {
+      "task_id": "runtime-supervisor-v1",
+      "title": "Kalshi runtime health supervisor",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "telegram-host-activation-v1"
+      ],
+      "scope": "Supervise only known start.sh/runtime components, report health, detect dead/stale processes, and perform bounded recovery. No arbitrary PID control and no live-money enablement."
+    },
+    {
+      "task_id": "controlled-research-deployment-v1",
+      "title": "Controlled research deployment",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "runtime-supervisor-v1",
+        "automation-control-integration-v1"
+      ],
+      "scope": "Create a validated path from C3-approved task branches into the research runtime without autonomous main merges, live credentials, or silent rollback loss."
+    },
+    {
+      "task_id": "project-brain-v1",
+      "title": "Durable project brain and state reconstruction",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "automation-control-integration-v1"
+      ],
+      "scope": "Maintain PROJECT_STATE.md, RESEARCH_HISTORY.md, DECISIONS.md, CURRENT_PRIORITIES.md, SYSTEM_HEALTH.json and compact task/history summaries."
+    },
+    {
+      "task_id": "unattended-reporting-v1",
+      "title": "Unattended automation and research reports",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "project-brain-v1",
+        "automation-status-watcher-v1"
+      ],
+      "scope": "Generate concise periodic/on-completion reports covering completed work, failures, rejected hypotheses, health, queue state and recommended next action; deliver through Telegram when appropriate."
+    },
+    {
+      "task_id": "telegram-natural-language-router-v1",
+      "title": "Telegram natural-language intent router",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "telegram-safe-task-submit-v1",
+        "project-brain-v1"
+      ],
+      "scope": "Map conversational requests only to strict safe tools and bounded tasks; never give the LLM arbitrary shell authority."
+    },
+    {
+      "task_id": "research-planner-v1",
+      "title": "Autonomous bounded research planner",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "telegram-safe-task-submit-v1",
+        "project-brain-v1",
+        "controlled-research-deployment-v1"
+      ],
+      "scope": "Turn current evidence into bounded research proposals/tasks, preserve negative evidence and chronology, and never promote historical results directly to execution."
+    },
+    {
+      "task_id": "automation-soak-test-v1",
+      "title": "Unattended automation soak test",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "automation-status-watcher-v1",
+        "runtime-supervisor-v1",
+        "unattended-reporting-v1"
+      ],
+      "scope": "Run an extended unattended soak with quota waits, network interruptions, worker restarts, multiple queued tasks and reviewer cycles; verify no state corruption, secret leakage or unauthorized runtime/main changes."
+    },
+    {
+      "task_id": "startup-recovery-v1",
+      "title": "Windows WSL Docker startup recovery",
+      "priority": "NORMAL",
+      "status": "PENDING",
+      "depends_on": [
+        "automation-soak-test-v1"
+      ],
+      "scope": "After ordinary reboot/sign-in, recover Docker Desktop/WSL controller, worker and supervised runtime safely; fail closed if ownership/task state is ambiguous."
+    },
+    {
+      "task_id": "proactive-telegram-operator-v1",
+      "title": "Proactive Telegram project operator",
+      "priority": "NORMAL",
+      "status": "PENDING",
+      "depends_on": [
+        "telegram-natural-language-router-v1",
+        "research-planner-v1",
+        "unattended-reporting-v1"
+      ],
+      "scope": "Send concise project updates, recommend the best next bounded action, accept plain-English redirects/approval, and preserve human checkpoints for sensitive/live-risk changes."
+    },
+    {
+      "task_id": "paper-snapshot-modularization-v1",
+      "title": "Modular paper snapshot and compact diagnostics",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "controlled-research-deployment-v1"
+      ],
+      "scope": "Modularize snapshot reporting into paper leaderboard, accounts, trades, anomalies, shadow summary, runtime health, metadata and a compact paper report."
+    },
+    {
+      "task_id": "paper-tail-diagnostics-v1",
+      "title": "TAIL_V1 convexity and concentration diagnostics",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "paper-snapshot-modularization-v1"
+      ],
+      "scope": "Analyze cheap-tail winners/losses/no-fills, independent episodes, depth/execution and concentration; flag low-win/high-return tails instead of treating aggregate equity as proof."
+    },
+    {
+      "task_id": "episode-dedup-statistics-v1",
+      "title": "Independent market episode statistics",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "paper-snapshot-modularization-v1"
+      ],
+      "scope": "Report strategy rows separately from unique markets and unique market/side episodes; add cluster-aware confidence intervals."
+    },
+    {
+      "task_id": "promotion-evidence-framework-v1",
+      "title": "Strategy promotion evidence framework",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "episode-dedup-statistics-v1",
+        "project-brain-v1"
+      ],
+      "scope": "Encode RESEARCH -> HISTORICAL LEAD -> OOS PASS -> PROSPECTIVE EXECUTION PASS -> EXECUTION ELIGIBLE -> ACTIVE/DEGRADED with immutable versions and fresh forward clocks."
+    },
+    {
+      "task_id": "data-coverage-audit-v1",
+      "title": "Historical and live data coverage audit",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "controlled-research-deployment-v1"
+      ],
+      "scope": "Quantify and improve usable KXBTC15M trade history, candles, BTC second-level data, synchronized snapshots and BRTI coverage; preserve visible gaps."
+    },
+    {
+      "task_id": "frozen-research-db-v1",
+      "title": "Frozen research database snapshots and integrity checks",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "data-coverage-audit-v1"
+      ],
+      "scope": "Automate safe SQLite backup/frozen training copies, integrity checks and metadata so heavy research does not stress or mutate the live research database."
+    },
+    {
+      "task_id": "feature-leakage-audit-v1",
+      "title": "Feature whitelist and leakage audit",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "frozen-research-db-v1"
+      ],
+      "scope": "Enforce explicit historical feature whitelists, T-1s/timestamp safety and settlement-label availability; scan result/settlement/future-derived fields for leakage."
+    },
+    {
+      "task_id": "multiple-testing-controls-v1",
+      "title": "Multiple-testing and correlation controls",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "episode-dedup-statistics-v1"
+      ],
+      "scope": "Add cluster/bootstrap and false-discovery-aware evaluation for hundreds of correlated strategy variants; preserve negative evidence."
+    },
+    {
+      "task_id": "fee-model-audit-v1",
+      "title": "Kalshi fee-model audit",
+      "priority": "NORMAL",
+      "status": "PENDING",
+      "depends_on": [
+        "paper-snapshot-modularization-v1"
+      ],
+      "scope": "Validate the paper fee approximation and make net rather than gross EV the default research output."
+    },
+    {
+      "task_id": "phase3a-label-quality-v1",
+      "title": "Phase3A action-label quality repair",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "feature-leakage-audit-v1"
+      ],
+      "scope": "Address the known resolved/ambiguous split and non-random missing stop P&L before action ML; document usable/censored/excluded labels."
+    },
+    {
+      "task_id": "phase3b-action-ml-v1",
+      "title": "Phase3B action ML benchmark",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "phase3a-label-quality-v1",
+        "multiple-testing-controls-v1"
+      ],
+      "scope": "Resume action modeling using chronology-safe data, PASS/no-trade, strict holdouts, calibration and fee/execution-aware metrics."
+    },
+    {
+      "task_id": "settlement-calibration-refresh-v1",
+      "title": "Settlement probability calibration baseline refresh",
+      "priority": "NORMAL",
+      "status": "PENDING",
+      "depends_on": [
+        "feature-leakage-audit-v1"
+      ],
+      "scope": "Re-run simple interpretable settlement-probability baselines only as calibration references; preserve the prior failure to robustly beat raw Kalshi unless new evidence changes it."
+    },
+    {
+      "task_id": "btc-direction-model-v1",
+      "title": "BTC direction model",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "feature-leakage-audit-v1",
+        "data-coverage-audit-v1"
+      ],
+      "scope": "Chronologically model near-term BTC direction from contemporaneous returns, EMA/VWAP, volume, imbalance, volatility and threshold context; evaluate calibration, not raw accuracy alone."
+    },
+    {
+      "task_id": "btc-path-models-v1",
+      "title": "BTC magnitude volatility and path models",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "btc-direction-model-v1"
+      ],
+      "scope": "Model movement magnitude, volatility/path and threshold-crossing behavior, not just direction."
+    },
+    {
+      "task_id": "regime-detection-v1",
+      "title": "Regime and change-point detection",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "btc-direction-model-v1",
+        "phase3b-action-ml-v1"
+      ],
+      "scope": "Evaluate rolling/decayed evidence, volatility/momentum/calibration regimes and change-point methods to reduce stale lifetime evidence."
+    },
+    {
+      "task_id": "microstructure-feature-layer-v1",
+      "title": "Trade aggressor and microstructure feature layer",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "data-coverage-audit-v1"
+      ],
+      "scope": "Add/validate aggressor flow, quote velocity, spread, top-book size, order-book imbalance, relative volume and timestamp-safe microstructure features."
+    },
+    {
+      "task_id": "full-depth-orderbook-v1",
+      "title": "Full-depth order-book reconstruction",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "microstructure-feature-layer-v1"
+      ],
+      "scope": "Reconstruct full depth prospectively where possible, with price levels, size, partial fills and book state so larger sizing is not modeled as repeated $1 fills."
+    },
+    {
+      "task_id": "timestamp-safe-events-v1",
+      "title": "Timestamp-safe news and event context",
+      "priority": "NORMAL",
+      "status": "PENDING",
+      "depends_on": [
+        "feature-leakage-audit-v1"
+      ],
+      "scope": "Design external event/news features only when source timestamps and availability can be proven at decision time."
+    },
+    {
+      "task_id": "kalshi-repricing-lag-v1",
+      "title": "Kalshi repricing and mispricing research",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "btc-path-models-v1",
+        "microstructure-feature-layer-v1"
+      ],
+      "scope": "Measure whether/when Kalshi quotes lag BTC/BRTI/microstructure changes, distinguish true executable edge from UI/display lag, and evaluate after fees/fill probability."
+    },
+    {
+      "task_id": "execution-policy-experiments-v1",
+      "title": "Prospective entry execution-policy experiments",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "paper-tail-diagnostics-v1",
+        "microstructure-feature-layer-v1"
+      ],
+      "scope": "Prospectively compare STRICT signal-ask IOC, +1 tick, +2 ticks and brief passive policies on fill rate, slippage, missed winners, avoided losers, fees and net P&L."
+    },
+    {
+      "task_id": "fill-slippage-model-v1",
+      "title": "Fill and slippage prediction model",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "execution-policy-experiments-v1",
+        "full-depth-orderbook-v1"
+      ],
+      "scope": "Estimate P(fill), fill percentage, entry slippage and time-to-fill from prospective PaperBroker observations."
+    },
+    {
+      "task_id": "meta-selector-pass-v1",
+      "title": "Meta-selector with PASS action",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "phase3b-action-ml-v1",
+        "regime-detection-v1",
+        "fill-slippage-model-v1",
+        "kalshi-repricing-lag-v1"
+      ],
+      "scope": "Select among sufficiently validated strategies/models using conservative net EV and allow PASS whenever evidence is insufficient."
+    },
+    {
+      "task_id": "expert-weighting-bandit-v1",
+      "title": "Expert weighting and contextual selection",
+      "priority": "NORMAL",
+      "status": "PENDING",
+      "depends_on": [
+        "meta-selector-pass-v1"
+      ],
+      "scope": "Compare Hedge/exponential weighting, Bayesian model averaging and contextual-bandit-style selection using only matured evidence; keep deep RL deferred."
+    },
+    {
+      "task_id": "prospective-experiment-factory-v1",
+      "title": "Frozen challenger and prospective experiment factory",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "promotion-evidence-framework-v1",
+        "research-planner-v1"
+      ],
+      "scope": "Create immutable candidate versions with discovery cutoff/forward start, register for shadow/paper evaluation, and report promotion/retirement without silently retuning parents."
+    },
+    {
+      "task_id": "candidate-80-89c-3-5m-v1",
+      "title": "Freeze and prospectively test 80-89c 3-5m TP15 SL5 lead",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "prospective-experiment-factory-v1",
+        "multiple-testing-controls-v1"
+      ],
+      "scope": "Treat the previously strong discovery/holdout result as a frozen prospective candidate, not proof; track independent episodes, fees, fills and forward performance."
+    },
+    {
+      "task_id": "hypothesis-early-skew-reversion-v1",
+      "title": "Early price-skew reversion hypothesis",
+      "priority": "NORMAL",
+      "status": "PENDING",
+      "depends_on": [
+        "prospective-experiment-factory-v1"
+      ],
+      "scope": "Test early 15-minute contract skews/reversion with predeclared rules and chronology-safe evidence."
+    },
+    {
+      "task_id": "hypothesis-deep-underdog-flips-v1",
+      "title": "Deep underdog flip hypothesis",
+      "priority": "NORMAL",
+      "status": "PENDING",
+      "depends_on": [
+        "prospective-experiment-factory-v1"
+      ],
+      "scope": "Study very low-priced contracts that later win, including base rates, path, liquidity, tail concentration and executable EV."
+    },
+    {
+      "task_id": "hypothesis-last-minute-spikes-v1",
+      "title": "Last-minute spike without threshold-cross hypothesis",
+      "priority": "NORMAL",
+      "status": "PENDING",
+      "depends_on": [
+        "btc-path-models-v1",
+        "prospective-experiment-factory-v1"
+      ],
+      "scope": "Quantify 1-2 minute BTC spikes that often fail to clear the contract threshold and determine whether price/path features add predictive value."
+    },
+    {
+      "task_id": "hypothesis-rollover-jumps-v1",
+      "title": "15-minute boundary jump hypothesis",
+      "priority": "NORMAL",
+      "status": "PENDING",
+      "depends_on": [
+        "btc-path-models-v1",
+        "data-coverage-audit-v1"
+      ],
+      "scope": "Test whether real BTC movement changes around KXBTC15M contract boundaries, controlling for ordinary clock-time effects and post-hoc selection."
+    },
+    {
+      "task_id": "hypothesis-late-extremes-v1",
+      "title": "Late extreme-price hypothesis",
+      "priority": "NORMAL",
+      "status": "PENDING",
+      "depends_on": [
+        "paper-tail-diagnostics-v1",
+        "prospective-experiment-factory-v1"
+      ],
+      "scope": "Study late extreme prices such as ~4c with ~1 minute left using executable fills, threshold distance and tail-risk diagnostics."
+    },
+    {
+      "task_id": "indicator-confirmation-research-v1",
+      "title": "EMA VWAP momentum MACD confirmation research",
+      "priority": "NORMAL",
+      "status": "PENDING",
+      "depends_on": [
+        "btc-direction-model-v1",
+        "prospective-experiment-factory-v1"
+      ],
+      "scope": "Quantify whether chart signals used manually add out-of-sample information beyond price/time/threshold context."
+    },
+    {
+      "task_id": "live-chart-indicator-ui-v1",
+      "title": "Live BTC and Kalshi chart with research indicators",
+      "priority": "LOW",
+      "status": "PENDING",
+      "depends_on": [
+        "indicator-confirmation-research-v1",
+        "runtime-supervisor-v1"
+      ],
+      "scope": "Improve the dashboard with a live chart and validated indicators/context; keep UI separate from evidence-generation logic."
+    },
+    {
+      "task_id": "paper-execution-fidelity-v2",
+      "title": "Paper execution fidelity V2",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "full-depth-orderbook-v1",
+        "fill-slippage-model-v1",
+        "fee-model-audit-v1"
+      ],
+      "scope": "Improve latency, depth, queue uncertainty, partial fills, stop gaps and fee realism while preserving approximation limits."
+    },
+    {
+      "task_id": "finite-bankroll-portfolio-v1",
+      "title": "Finite bankroll portfolio and risk model",
+      "priority": "HIGH",
+      "status": "PENDING",
+      "depends_on": [
+        "meta-selector-pass-v1",
+        "paper-execution-fidelity-v2"
+      ],
+      "scope": "Replace the misleading sum of independent $10 experiment accounts with a single finite bankroll simulation, conservative sizing, exposure limits and drawdown controls."
+    },
+    {
+      "task_id": "shadow-demo-broker-interface-v1",
+      "title": "Shadow demo live broker interface separation",
+      "priority": "NORMAL",
+      "status": "GATED_FUTURE",
+      "depends_on": [
+        "finite-bankroll-portfolio-v1",
+        "promotion-evidence-framework-v1"
+      ],
+      "scope": "Define common trade-intent/broker interfaces with strictly separated SHADOW/PAPER/DEMO/LIVE credentials and no live writes enabled."
+    },
+    {
+      "task_id": "live-executor-disabled-v1",
+      "title": "Live executor implementation disabled by default",
+      "priority": "LOW",
+      "status": "GATED_FUTURE",
+      "depends_on": [
+        "shadow-demo-broker-interface-v1",
+        "paper-execution-fidelity-v2"
+      ],
+      "scope": "Only after strong prospective evidence, implement an isolated live execution adapter with live order submission still disabled and impossible to enable implicitly."
+    },
+    {
+      "task_id": "live-risk-kill-switch-v1",
+      "title": "Live risk engine reconciliation and kill switch",
+      "priority": "LOW",
+      "status": "GATED_FUTURE",
+      "depends_on": [
+        "live-executor-disabled-v1"
+      ],
+      "scope": "Add hard per-trade/daily/exposure caps, idempotent order handling, position/order reconciliation, audit trail and emergency pause/kill behavior. Raising caps remains a human checkpoint."
+    },
+    {
+      "task_id": "micro-live-penny-trial-v1",
+      "title": "Human-authorized micro-live penny trial",
+      "priority": "LOW",
+      "status": "HUMAN_GATE_ONLY",
+      "depends_on": [
+        "live-risk-kill-switch-v1"
+      ],
+      "scope": "Do not execute automatically. Eligible only after repeated prospective/paper evidence supports positive net EV and the user explicitly authorizes a tiny live trial."
+    },
+    {
+      "task_id": "evidence-based-scale-ladder-v1",
+      "title": "Evidence-based live scaling ladder",
+      "priority": "LOW",
+      "status": "HUMAN_GATE_ONLY",
+      "depends_on": [
+        "micro-live-penny-trial-v1"
+      ],
+      "scope": "Scale only after repeated real net-positive evidence, stable execution/reconciliation and explicit human approval; no automatic risk-cap increases."
+    }
+  ],
+  "explicitly_not_in_queue": [
+    "Generic AutoDev / zero-supervision software-development product commercialization (deferred until the Kalshi system is strong).",
+    "Any automatic merge to main.",
+    "Any arbitrary Telegram /shell or /exec capability.",
+    "Any automatic creation or use of full-access Kalshi live credentials.",
+    "Any automatic live-money activation or risk-cap increase.",
+    "Deep RL before execution simulator fidelity is materially stronger."
+  ]
+}
