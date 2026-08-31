@@ -479,3 +479,183 @@ The stale/restart issue is therefore considered RESOLVED for the
 current PaperBroker architecture.
 
 The next development phase may proceed to ML Dataset V1.
+
+---
+
+# ML Dataset V1 / Logistic Baseline Completed
+
+The first chronological supervised ML experiment has been
+implemented.
+
+New research modules:
+
+- src/kalshi_stats/ml_dataset.py
+- src/kalshi_stats/ml_baselines.py
+- src/kalshi_stats/ml_walkforward.py
+
+Tests:
+
+- tests/test_ml_dataset.py
+- tests/test_ml_walkforward.py
+
+Dependency:
+
+- scikit-learn added to pyproject.toml
+- installed only in the project .venv
+
+## Dataset
+
+Source:
+
+historical_market_features
+
+Observed dataset:
+
+- 88,359 rows
+- 5,891 unique markets
+
+The model uses an explicit feature whitelist.
+
+The historical result field is LABEL_ONLY and is not included
+in the feature matrix.
+
+Identifiers/timestamps used for organization are also excluded
+from X.
+
+Historical BRTI, trade imbalance, and book imbalance were not
+available in timestamp-safe form for this historical dataset and
+were not included.
+
+## Validation
+
+Five expanding chronological folds were used.
+
+The oldest approximately 50% of markets form the initial training
+window.
+
+All rows from one market remain in one fold.
+
+Every fold enforces:
+
+max(train observed_ts) < min(test observed_ts)
+
+Preprocessing is fitted only on training rows.
+
+No random row splitting is used.
+
+Walk-forward evaluation contained approximately:
+
+- 44,184 test rows
+- 2,946 unique test markets
+
+## Logistic V1 Result
+
+Aggregate retrospective probability metrics:
+
+Logistic regression:
+
+- Brier: approximately 0.141969
+- Log loss: approximately 0.431703
+
+Kalshi YES bid/ask midpoint:
+
+- Brier: approximately 0.140142
+- Log loss: approximately 0.421051
+
+Therefore Logistic V1 DID NOT beat Kalshi.
+
+It was worse on both metrics and underperformed Kalshi across
+every reported chronological fold, contract-price band, and
+seconds-remaining band.
+
+This is a negative historical probability result and should be
+preserved.
+
+It does not demonstrate an ML trading edge.
+
+## Important Interpretation
+
+Logistic V1 uses raw Kalshi probability/price inputs.
+
+A standard logistic model using raw probability p cannot
+naturally represent the identity mapping:
+
+predicted_probability = market_probability
+
+across the entire 0-1 range.
+
+This appears particularly damaging near extreme market
+probabilities.
+
+For example, in the 0-60 seconds-remaining evaluation, Kalshi's
+Brier score was dramatically better than Logistic V1.
+
+Therefore the next linear experiment should NOT immediately be
+replaced by gradient boosting.
+
+The next experiment should first test a market-logit/residual
+formulation where the contemporaneous Kalshi midpoint is
+transformed to:
+
+log(p / (1-p))
+
+This lets a logistic model naturally reproduce the market
+probability and test whether BTC/state features provide
+incremental information beyond that market prior.
+
+## Recommended ML Phase 1B
+
+Evaluate three chronological models using the exact same market
+folds:
+
+A. MARKET_ONLY
+
+Use contemporaneous Kalshi midpoint logit only.
+
+Purpose:
+
+- determine whether simple chronological recalibration improves
+  the raw Kalshi probability.
+
+B. STATE_ONLY
+
+Use stationary BTC/market-state features but no Kalshi
+probability input.
+
+Purpose:
+
+- measure how much settlement information exists in BTC/state
+  independently of Kalshi's market opinion.
+
+C. MARKET_PLUS_STATE
+
+Use Kalshi midpoint logit plus stationary BTC/state features.
+
+Purpose:
+
+- determine whether BTC/state provides incremental probability
+  information after conditioning on Kalshi's price.
+
+Preferred stationary features include, where available:
+
+- seconds_remaining
+- threshold_distance_bps
+- threshold_distance_vol60
+- return_30s
+- return_60s
+- return_180s
+- return_300s
+- EMA spreads
+- EMA slopes
+- VWAP distance bps
+- realized volatility
+- range
+- relative volume
+
+Avoid relying heavily on absolute BTC price-level variables such
+as raw spot/threshold/EMA levels in the primary stationary model.
+
+Preserve Logistic V1 unchanged as the original baseline.
+
+Gradient boosting should be evaluated only after this corrected
+linear residual experiment.
