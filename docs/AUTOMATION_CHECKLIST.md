@@ -10,7 +10,7 @@ unchecked items are not implemented and must not be inferred from documentation.
 4. [x] noninteractive Codex adapter
 5. [x] machine-readable task queue
 6. [ ] durable run state/context rollover
-7. [ ] rate-limit handling
+7. [x] rate-limit handling
 8. [ ] builder/reviewer pipeline
 9. [ ] mechanical validation gates
 10. [ ] runtime health supervisor
@@ -62,3 +62,9 @@ received the frozen prompt, produced the exact output and final response, exited
 zero, exposed a thread ID, and requested zero approvals. Its task and run reached
 `PASSED`; evidence was preserved before guarded disposable cleanup. This closes
 the Phase C1 authenticated-canary proof. Items 6 through 16 remain unchanged.
+
+Phase C2A adds a host-side quota wait wrapper for one already-selected task. A
+rate-limited run is durably marked `WAITING_FOR_QUOTA`, waits with bounded
+backoff without consuming another attempt, and launches a fresh bounded runner
+invocation when quota is available. The 12-hour default horizon fails closed.
+This does not implement a dispatcher, queue, or generalized context rollover.

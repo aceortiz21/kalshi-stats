@@ -31,6 +31,7 @@ from .automation_state import (
     utc_now,
     write_json_atomic,
 )
+from .automation_quota import run_with_quota_wait
 
 
 CONTAINER_WORKTREE = Path("/workspace")
@@ -921,8 +922,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         dry_run=args.dry_run,
     )
     try:
-        plan = prepare_launch(task, run, config)
-        result = execute_launch(plan)
+        if config.dry_run:
+            result = execute_launch(prepare_launch(task, run, config))
+        else:
+            result = run_with_quota_wait(
+                args.task_record,
+                args.run_record,
+                lambda current_task, current_run: execute_launch(
+                    prepare_launch(current_task, current_run, config)
+                ),
+            )
     except RunnerFailure as exc:
         print(json.dumps({"error": str(exc), "classification": exc.classification.value}))
         return 2
