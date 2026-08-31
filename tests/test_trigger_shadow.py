@@ -338,3 +338,39 @@ def test_stable_3s_confirms_after_clean_run():
 
     finally:
         connection.close()
+
+
+def test_qualification_boundary_is_generic():
+    from kalshi_stats.trigger_shadow import (
+        row_qualifies,
+    )
+
+    inside = {
+        "yes_ask": .69,
+        "seconds_remaining": 500,
+    }
+
+    above = {
+        "yes_ask": .70,
+        "seconds_remaining": 500,
+    }
+
+    below = {
+        "yes_ask": .59,
+        "seconds_remaining": 500,
+    }
+
+    assert row_qualifies(
+        inside,
+        "yes",
+    )
+
+    assert not row_qualifies(
+        above,
+        "yes",
+    )
+
+    assert not row_qualifies(
+        below,
+        "yes",
+    )

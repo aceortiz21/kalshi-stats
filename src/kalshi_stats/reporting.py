@@ -80,6 +80,7 @@ def render_live_decision_cards(
     active_views,
     validated_strategies,
     micro_states=None,
+    trigger_states=None,
 ) -> str:
     """Render the fast live decision layer.
 
@@ -89,6 +90,7 @@ def render_live_decision_cards(
     """
 
     micro_states = micro_states or {}
+    trigger_states = trigger_states or {}
 
     strong_strategy_map = {}
 
@@ -265,6 +267,342 @@ def render_live_decision_cards(
             tp=tp,
             sl=sl,
         )
+
+
+    def trigger_panel(view) -> str:
+        """
+        Show the latest prospective main-strategy
+        episode and generic persistence experiments.
+
+        These profiles evaluate persistence of the
+        whole qualification condition. They are not
+        tied to a specific boundary-price example.
+        """
+
+        key = (
+            str(
+                view.market_ticker
+            ),
+            str(
+                view.side
+            ).lower(),
+        )
+
+        state = trigger_states.get(
+            key
+        )
+
+        if not state:
+            return ""
+
+        confirmations = state.get(
+            "confirmations",
+            [],
+        )
+
+        if not confirmations:
+            return ""
+
+        labels = {
+            "RAW":
+                "Raw",
+
+            "STABLE_3S":
+                "Stable 3s",
+
+            "STABLE_5S":
+                "Stable 5s",
+
+            "STABLE_10S":
+                "Stable 10s",
+
+            "STABLE_15S":
+                "Stable 15s",
+
+            "OCC_4_OF_5S":
+                "4 of 5s",
+
+            "OCC_8_OF_10S":
+                "8 of 10s",
+        }
+
+        table_rows = []
+
+        for row in confirmations:
+            profile_id = str(
+                row[
+                    "profile_id"
+                ]
+            )
+
+            status = str(
+                row[
+                    "status"
+                ]
+            )
+
+            if (
+                row.get(
+                    "entry_ask"
+                )
+                is None
+            ):
+                entry = "-"
+                exits = "-"
+
+            else:
+                entry_price = float(
+                    row[
+                        "entry_ask"
+                    ]
+                )
+
+                entry = _price(
+                    entry_price
+                )
+
+                exits = (
+                    f"{_price(float(row['tp_price']))}"
+                    " / "
+                    f"{_price(float(row['sl_price']))}"
+                )
+
+            count_fp = row.get(
+                "count_fp"
+            )
+
+            if count_fp is None:
+                shadow = "-"
+
+            else:
+                notional = row.get(
+                    "entry_notional"
+                )
+
+                shadow = (
+                    f"{count_fp} ct"
+                    if notional is None
+                    else (
+                        f"{count_fp} ct · "
+                        f"${float(notional):.4f}"
+                    )
+                )
+
+                shadow_status = row.get(
+                    "shadow_status"
+                )
+
+                if shadow_status:
+                    shadow += (
+                        " · "
+                        + str(
+                            shadow_status
+                        )
+                    )
+
+            first_hit = row.get(
+                "first_hit"
+            )
+
+            shadow_pnl = row.get(
+                "bid_proxy_gross_pnl"
+            )
+
+            if first_hit:
+                result = str(
+                    first_hit
+                )
+
+                if shadow_pnl is not None:
+                    result += (
+                        " · "
+                        f"${float(shadow_pnl):+.4f}"
+                    )
+
+            elif (
+                row.get(
+                    "label_status"
+                )
+                == "INCOMPLETE"
+            ):
+                result = "INCOMPLETE"
+
+            else:
+                result = "-"
+
+            if status == "CONFIRMED":
+                status_style = (
+                    "font-weight:700;"
+                    "color:#0d6b53;"
+                )
+
+            elif status == "EXPIRED":
+                status_style = (
+                    "opacity:.55;"
+                )
+
+            else:
+                status_style = (
+                    "font-weight:700;"
+                    "color:#76520f;"
+                )
+
+            table_rows.append(
+                """
+                <tr>
+                  <td>
+                    <strong>{profile}</strong>
+                  </td>
+
+                  <td style="{style}">
+                    {status}
+                  </td>
+
+                  <td>{entry}</td>
+
+                  <td>{exits}</td>
+
+                  <td>{shadow}</td>
+
+                  <td>{result}</td>
+                </tr>
+                """.format(
+                    profile=html.escape(
+                        labels.get(
+                            profile_id,
+                            profile_id,
+                        )
+                    ),
+
+                    style=status_style,
+
+                    status=html.escape(
+                        status
+                    ),
+
+                    entry=entry,
+
+                    exits=exits,
+
+                    shadow=html.escape(
+                        shadow
+                    ),
+
+                    result=html.escape(
+                        result
+                    ),
+                )
+            )
+
+        episode_number = int(
+            state.get(
+                "episode_number",
+                0,
+            )
+            or 0
+        )
+
+        episode_end = state.get(
+            "episode_end_ms"
+        )
+
+        episode_status = (
+            "ACTIVE EPISODE"
+            if episode_end is None
+            else "ENDED EPISODE"
+        )
+
+        return """
+        <div style="
+            margin-top:14px;
+            padding:12px;
+            border:
+                1px solid rgba(127,127,127,.28);
+            border-radius:10px;
+        ">
+
+          <div style="
+              display:flex;
+              justify-content:space-between;
+              gap:12px;
+              flex-wrap:wrap;
+              align-items:center;
+              margin-bottom:9px;
+          ">
+            <div>
+              <div style="
+                  font-size:12px;
+                  text-transform:uppercase;
+                  letter-spacing:.07em;
+                  opacity:.72;
+              ">
+                Trigger confirmation research
+              </div>
+
+              <strong>
+                Episode #{episode}
+              </strong>
+            </div>
+
+            <div style="
+                font-size:11px;
+                font-weight:700;
+                opacity:.72;
+            ">
+              {episode_status}
+            </div>
+          </div>
+
+          <div style="overflow-x:auto;">
+            <table style="
+                min-width:650px;
+                font-size:12px;
+            ">
+              <thead>
+                <tr>
+                  <th>Definition</th>
+                  <th>Status</th>
+                  <th>Entry</th>
+                  <th>TP / SL</th>
+                  <th>Penny Shadow</th>
+                  <th>Result</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {rows}
+              </tbody>
+            </table>
+          </div>
+
+          <div style="
+              margin-top:9px;
+              font-size:12px;
+              opacity:.72;
+              line-height:1.45;
+          ">
+            RAW is the frozen historical main rule.
+            The timing/occupancy definitions are
+            prospective research only.
+
+            They test persistence of the complete
+            qualification condition near ANY boundary;
+            no specific price bounce is hard-coded.
+          </div>
+
+        </div>
+        """.format(
+            episode=episode_number,
+
+            episode_status=html.escape(
+                episode_status
+            ),
+
+            rows="\n".join(
+                table_rows
+            ),
+        )
+
 
 
     def micro_panel(view) -> str:
@@ -804,6 +1142,8 @@ def render_live_decision_cards(
 
               {strategy_panel}
 
+              {trigger_panel}
+
               {micro_panel}
             </article>
             """.format(
@@ -840,6 +1180,7 @@ def render_live_decision_cards(
                 plus_15=_pct(view.plus_15c_rate),
                 plus_20=_pct(view.plus_20c_rate),
                 strategy_panel=strategy_panel(view),
+                trigger_panel=trigger_panel(view),
                 micro_panel=micro_panel(view),
             )
         )
@@ -1993,10 +2334,12 @@ def render_live_market_fragment(
     brti=None,
     personal=None,
     micro_states=None,
+    trigger_states=None,
 ) -> None:
     """Write only the lightweight live decision UI."""
 
     micro_states = micro_states or {}
+    trigger_states = trigger_states or {}
 
     output = Path(output_path)
 
@@ -2032,6 +2375,7 @@ def render_live_market_fragment(
                 yes_views,
                 validated_strategies,
                 micro_states=micro_states,
+                trigger_states=trigger_states,
             )
         )
 
@@ -2048,6 +2392,7 @@ def render_live_market_fragment(
                 no_views,
                 validated_strategies,
                 micro_states=micro_states,
+                trigger_states=trigger_states,
             )
         )
 
@@ -2057,6 +2402,7 @@ def render_live_market_fragment(
                 other_views,
                 validated_strategies,
                 micro_states=micro_states,
+                trigger_states=trigger_states,
             )
         )
 
@@ -2070,6 +2416,7 @@ def render_live_market_fragment(
                 [],
                 validated_strategies,
                 micro_states=micro_states,
+                trigger_states=trigger_states,
             )
         )
 

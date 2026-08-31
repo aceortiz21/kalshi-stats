@@ -28,6 +28,11 @@ from .micro_atlas import (
     build_live_micro_state,
     live_micro_states_signature,
 )
+
+from .trigger_shadow import (
+    build_live_trigger_state,
+    trigger_state_signature,
+)
 from .reporting import render_live_market_fragment
 from .sync import (
     discover_pending_finalizations,
@@ -228,6 +233,60 @@ def brti_state_signature(
 
 
 
+def load_live_trigger_states(
+    connection,
+    views,
+):
+    states = {}
+
+    for view in views:
+        state = build_live_trigger_state(
+            connection,
+            market_ticker=(
+                view.market_ticker
+            ),
+            side=view.side,
+        )
+
+        if state is None:
+            continue
+
+        states[
+            (
+                str(
+                    view.market_ticker
+                ),
+                str(
+                    view.side
+                ).lower(),
+            )
+        ] = state
+
+    return states
+
+
+def live_trigger_states_signature(
+    states,
+):
+    if not states:
+        return ()
+
+    return tuple(
+        (
+            key,
+            trigger_state_signature(
+                states[
+                    key
+                ]
+            ),
+        )
+        for key in sorted(
+            states
+        )
+    )
+
+
+
 def load_live_micro_states(
     connection,
     views,
@@ -373,6 +432,7 @@ async def run_websocket_live_loop(
     last_personal_check = 0.0
 
     micro_states = {}
+    trigger_states = {}
 
     finalization_task = None
     finalization_ticker: str | None = None
@@ -843,6 +903,7 @@ async def run_websocket_live_loop(
                 ws_connected = False
                 brti_state = None
                 micro_states = {}
+                trigger_states = {}
 
                 refresh_health(
                     force=True
@@ -856,6 +917,7 @@ async def run_websocket_live_loop(
                     brti=brti_state,
                     personal=personal_state,
                     micro_states=micro_states,
+                    trigger_states=trigger_states,
                 )
 
                 if previous_market is not None:
@@ -930,6 +992,13 @@ async def run_websocket_live_loop(
                 )
             )
 
+            trigger_states = (
+                load_live_trigger_states(
+                    connection,
+                    views,
+                )
+            )
+
             brti_state = load_live_brti_state(
                 connection,
                 ticker,
@@ -949,6 +1018,7 @@ async def run_websocket_live_loop(
                 brti=brti_state,
                 personal=personal_state,
                 micro_states=micro_states,
+                trigger_states=trigger_states,
             )
 
             close_ts = (
@@ -1109,6 +1179,13 @@ async def run_websocket_live_loop(
                             )
                         )
 
+                        trigger_states = (
+                            load_live_trigger_states(
+                                connection,
+                                views,
+                            )
+                        )
+
                         brti_state = load_live_brti_state(
                             connection,
                             ticker,
@@ -1149,6 +1226,11 @@ async def run_websocket_live_loop(
                             live_micro_states_signature(
                                 micro_states
                             ),
+
+                            live_trigger_states_signature(
+                                trigger_states
+                            ),
+
                             tuple(
                                 (
                                     view.side,
@@ -1173,6 +1255,7 @@ async def run_websocket_live_loop(
                                 brti=brti_state,
                                 personal=personal_state,
                                 micro_states=micro_states,
+                                trigger_states=trigger_states,
                             )
 
                             last_signature = (
@@ -1267,6 +1350,9 @@ async def run_websocket_live_loop(
                             ],
                             health=health_state,
                             brti=brti_state,
+                            personal=personal_state,
+                            micro_states=micro_states,
+                            trigger_states=trigger_states,
                         )
                     except Exception:
                         pass
