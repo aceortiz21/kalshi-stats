@@ -22,6 +22,7 @@ PROSPECTIVE_SUPERVISOR_PID=""
 TRIGGER_SHADOW_SUPERVISOR_PID=""
 SHADOW_LAB_SUPERVISOR_PID=""
 CHALLENGER_SUPERVISOR_PID=""
+PAPER_BROKER_SUPERVISOR_PID=""
 
 if [[ ! -x "$PYTHON" ]]; then
     echo "ERROR: .venv Python not found."
@@ -159,6 +160,7 @@ cleanup() {
     echo
     echo "Stopping managed services..."
 
+    stop_supervisor "$PAPER_BROKER_SUPERVISOR_PID"
     stop_supervisor "$CHALLENGER_SUPERVISOR_PID"
     stop_supervisor "$SHADOW_LAB_SUPERVISOR_PID"
     stop_supervisor "$TRIGGER_SHADOW_SUPERVISOR_PID"
@@ -379,6 +381,37 @@ fi
 
 
 # ============================================================
+# Realistic Kalshi PaperBroker
+# ============================================================
+
+if pgrep -f \
+    'python.*-m kalshi_stats\.paper_broker' \
+    >/dev/null 2>&1
+then
+    echo "PaperBroker already running."
+else
+    : > reports/paper_broker.log
+
+    supervise_service \
+        "Realistic Kalshi PaperBroker" \
+        "reports/paper_broker.log" \
+        -m kalshi_stats.paper_broker \
+        --db "$DB" \
+        --interval 0.25 \
+        --starting-cash 10 \
+        --trade-notional 0.01 \
+        > /dev/null 2>&1 &
+
+    PAPER_BROKER_SUPERVISOR_PID=$!
+
+    echo \
+        "PaperBroker started " \
+        "(log: reports/paper_broker.log)"
+fi
+
+
+
+# ============================================================
 # Continuous multi-strategy Shadow Lab
 # ============================================================
 
@@ -470,6 +503,7 @@ echo "  Kalshi x BTC sync    reports/market_sync.log"
 echo "  Account tracking     reports/account_sync.log"
 echo "  Prospective logger   reports/prospective.log"
 echo "  Trigger shadow       reports/trigger_shadow.log"
+echo "  PaperBroker          reports/paper_broker.log"
 echo "  Continuous lab       reports/shadow_lab.log"
 echo "  Challenger generator reports/challenger_generator.log"
 echo
