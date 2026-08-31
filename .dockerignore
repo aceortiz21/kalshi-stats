@@ -1,0 +1,8 @@
+**
+!pyproject.toml
+!README.md
+!src/
+!src/**
+!automation/
+!automation/container/
+!automation/container/**

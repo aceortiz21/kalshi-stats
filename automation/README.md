@@ -5,9 +5,10 @@ and development. Conversation history is never authoritative. A fresh process
 must reconstruct its work from repository documents, task JSON, run files, and
 Git state.
 
-Phase A defines state only. It does not run Codex, execute retries, create
-worktrees, restart services, merge branches, deploy research, or submit Kalshi
-orders.
+Phase A defines the durable state model. Phase B adds an isolated development
+container and a bounded noninteractive Codex runner. Neither phase chooses tasks,
+executes retries, creates worktrees, restarts services, merges branches, deploys
+research, or submits Kalshi orders.
 
 ## Directory contract
 
@@ -67,8 +68,11 @@ automation/runs/<run_id>/
 - `errors.log` stores diagnostic output; it must never contain credentials.
 
 Files may begin empty when a run is created, but their expected paths must be
-present in `state.json`. Later phases must decide creation timing and durability
-requirements for JSONL append operations.
+present in `state.json`. Phase B now creates this exact six-file contract. JSON
+state and validation writes use atomic replacement; runner metadata events are
+appended and fsynced. During actual execution, Codex JSONL stdout streams into
+`events.jsonl`, stderr streams into `errors.log`, and the Codex
+`--output-last-message` path is `final.md`.
 
 ## Context recovery contract
 
@@ -116,3 +120,27 @@ Persisted error classes are defined by `ErrorClassification` and
 
 Phase A performs no retries. `attempt_count` is incremented only when a queued
 task enters `RUNNING`; quota resumption does not consume another attempt.
+
+## Phase B isolated runner
+
+`src/kalshi_stats/automation_runner.py` consumes already-created `TaskRecord` and
+`RunRecord` files. It verifies the task path and branch against Git's registered
+worktree metadata, the permitted automation-worktree root, and the separately
+configured primary runtime worktree. It rejects `main`,
+`automation-integration`, path escapes, record/Git disagreement, unrelated Git
+repositories, broad auth mounts, and unknown or credential-like environment
+variables as `SECURITY_VIOLATION`.
+
+The runner supports task/run IDs through their records, task worktree, prompt
+path, run directory, dedicated auth directory, image, optional model/reasoning
+effort, timeout, explicit environment-name allowlist, and required dry-run mode.
+Dry-run performs all boundary checks and renders a redacted launch plan without
+creating a Git bundle or starting Docker/Codex.
+
+Fresh-context bootstrap text directs Codex to read the five repository sources,
+task JSON, current handoff, Git status/diff/log, and prior validation before any
+change. This makes a fresh run recoverable from durable inputs, but Phase B does
+not yet implement automatic context rollover or `codex exec resume` scheduling.
+
+See `automation/container/README.md` for the exact image, mounts, Codex 0.151.0
+syntax, threat boundary, authentication bootstrap, and smoke test.
