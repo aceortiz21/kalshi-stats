@@ -19,6 +19,7 @@ BRTI_SUPERVISOR_PID=""
 SYNC_SUPERVISOR_PID=""
 ACCOUNT_SUPERVISOR_PID=""
 PROSPECTIVE_SUPERVISOR_PID=""
+TRIGGER_SHADOW_SUPERVISOR_PID=""
 
 if [[ ! -x "$PYTHON" ]]; then
     echo "ERROR: .venv Python not found."
@@ -156,6 +157,7 @@ cleanup() {
     echo
     echo "Stopping managed services..."
 
+    stop_supervisor "$TRIGGER_SHADOW_SUPERVISOR_PID"
     stop_supervisor "$PROSPECTIVE_SUPERVISOR_PID"
     stop_supervisor "$ACCOUNT_SUPERVISOR_PID"
     stop_supervisor "$SYNC_SUPERVISOR_PID"
@@ -342,6 +344,36 @@ else
 fi
 
 
+
+# ============================================================
+# Main-trigger confirmation / shadow execution researcher
+# ============================================================
+
+if pgrep -f \
+    'python.*-m kalshi_stats\.trigger_shadow' \
+    >/dev/null 2>&1
+then
+    echo "Trigger shadow researcher already running."
+else
+    : > reports/trigger_shadow.log
+
+    supervise_service \
+        "Trigger confirmation / shadow researcher" \
+        "reports/trigger_shadow.log" \
+        -m kalshi_stats.trigger_shadow \
+        --db "$DB" \
+        --interval 1 \
+        > /dev/null 2>&1 &
+
+    TRIGGER_SHADOW_SUPERVISOR_PID=$!
+
+    echo \
+        "Trigger shadow researcher started " \
+        "(log: reports/trigger_shadow.log)"
+fi
+
+
+
 echo
 echo "Dashboard:"
 echo "$URL"
@@ -375,6 +407,7 @@ echo "  Official BRTI        reports/brti_live.log"
 echo "  Kalshi x BTC sync    reports/market_sync.log"
 echo "  Account tracking     reports/account_sync.log"
 echo "  Prospective logger   reports/prospective.log"
+echo "  Trigger shadow       reports/trigger_shadow.log"
 echo
 echo "Press Ctrl+C to stop everything started here."
 echo

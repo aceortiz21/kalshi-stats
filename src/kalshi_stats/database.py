@@ -474,6 +474,132 @@ ON micro_multiplier_atlas (
 
 
 
+
+CREATE TABLE IF NOT EXISTS main_trigger_confirmations (
+    confirmation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    opportunity_id INTEGER NOT NULL,
+    strategy_id TEXT NOT NULL,
+
+    market_ticker TEXT NOT NULL,
+    side TEXT NOT NULL,
+    episode_number INTEGER NOT NULL,
+
+    profile_id TEXT NOT NULL,
+
+    raw_start_ms INTEGER NOT NULL,
+
+    window_seconds REAL NOT NULL,
+    minimum_occupancy REAL NOT NULL,
+    requires_continuous INTEGER NOT NULL,
+
+    status TEXT NOT NULL DEFAULT 'WAITING',
+
+    confirmed_at_ms INTEGER,
+    confirm_feature_ts INTEGER,
+
+    entry_bid REAL,
+    entry_ask REAL,
+    seconds_remaining REAL,
+
+    qualified_samples INTEGER,
+    total_samples INTEGER,
+
+    tp_price REAL,
+    sl_price REAL,
+
+    label_status TEXT NOT NULL DEFAULT 'WAITING',
+
+    first_hit TEXT,
+    exit_ts_ms INTEGER,
+    exit_bid REAL,
+
+    planned_gross_profit_per_contract REAL,
+    gross_profit_per_contract REAL,
+
+    settlement_result TEXT,
+    path_complete INTEGER,
+
+    UNIQUE (
+        opportunity_id,
+        profile_id
+    ),
+
+    FOREIGN KEY (
+        opportunity_id
+    )
+    REFERENCES prospective_opportunities(
+        opportunity_id
+    )
+);
+
+CREATE INDEX IF NOT EXISTS
+idx_main_trigger_confirmations_market
+ON main_trigger_confirmations (
+    market_ticker,
+    side,
+    episode_number
+);
+
+CREATE INDEX IF NOT EXISTS
+idx_main_trigger_confirmations_status
+ON main_trigger_confirmations (
+    status,
+    label_status
+);
+
+
+CREATE TABLE IF NOT EXISTS shadow_execution_intents (
+    shadow_intent_id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    confirmation_id INTEGER NOT NULL UNIQUE,
+
+    mode TEXT NOT NULL DEFAULT 'SHADOW',
+
+    strategy_id TEXT NOT NULL,
+    profile_id TEXT NOT NULL,
+
+    market_ticker TEXT NOT NULL,
+    side TEXT NOT NULL,
+    episode_number INTEGER NOT NULL,
+
+    created_at_ms INTEGER NOT NULL,
+
+    notional_cap REAL NOT NULL,
+
+    count_fp TEXT NOT NULL,
+
+    entry_price REAL NOT NULL,
+    entry_notional REAL NOT NULL,
+
+    tp_price REAL NOT NULL,
+    sl_price REAL NOT NULL,
+
+    status TEXT NOT NULL DEFAULT 'OPEN',
+
+    exit_reason TEXT,
+    exit_price REAL,
+
+    planned_gross_pnl REAL,
+    bid_proxy_gross_pnl REAL,
+
+    FOREIGN KEY (
+        confirmation_id
+    )
+    REFERENCES main_trigger_confirmations(
+        confirmation_id
+    )
+);
+
+CREATE INDEX IF NOT EXISTS
+idx_shadow_execution_market
+ON shadow_execution_intents (
+    market_ticker,
+    side
+);
+
+
+
 CREATE TABLE IF NOT EXISTS fill_feature_snapshots (
     fill_id TEXT PRIMARY KEY,
 
