@@ -74,5 +74,6 @@
     ,"base_branch": {"type": "string", "minLength": 1}
     ,"current_run_id": {"type": ["string", "null"]}
     ,"blocked_reason": {"type": ["string", "null"]}
+    ,"base_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40,64}$"}
   }
 }

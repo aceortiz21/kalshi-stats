@@ -5,10 +5,16 @@ import subprocess
 import pytest
 
 from kalshi_stats.automation_dispatcher import Dispatcher, DispatcherFailure, DispatcherLock, select_runnable
+from kalshi_stats.automation_pipeline import PipelineDecision
+from kalshi_stats.automation_state import ErrorClassification
 from kalshi_stats.automation_state import TaskPriority, TaskRecord, TaskStatus, load_task, load_run, save_task, save_run, RunRecord
 
 
 NOW = "2026-08-31T12:00:00Z"
+
+
+def _passed_pipeline(task, run):
+    return PipelineDecision("PASSED", ErrorClassification.SUCCESS, (run,), (), (), 0)
 
 
 def _task(task_id, root, *, priority=TaskPriority.NORMAL, dependencies=()):
@@ -72,10 +78,10 @@ def test_dispatcher_chains_dependency_and_once_processes_one(dispatcher_fixture)
     def fake(task, run, config):
         calls.append((task.task_id, run.run_id, task.attempt_count))
         state_path = Path(task.worktree) / "automation" / "runs" / run.run_id / "state.json"
-        save_run(state_path, RunRecord.from_dict({**run.to_dict(), "status": "VALIDATING", "error_classification": None}))
+        save_run(state_path, RunRecord.from_dict({**run.to_dict(), "status": "VALIDATING", "session_thread_id": f"session-{run.run_id}", "error_classification": None}))
         return {"error_classification": "SUCCESS"}
     dispatcher = Dispatcher(repository=repo, allowed_worktree_root=root, primary_runtime_worktree=repo,
-                            base_branch="automation/base", auth_directory=auth, runner_call=fake)
+                            base_branch="automation/base", auth_directory=auth, runner_call=fake, pipeline_call=_passed_pipeline)
     result = dispatcher.run(once=True)
     assert [task.task_id for task in result] == ["a"]
     assert calls == [("a", "a-run-1", 1)]
@@ -93,10 +99,10 @@ def test_context_rollover_keeps_attempt_and_creates_continuation(dispatcher_fixt
     def fake(current, run, config):
         state_path = Path(current.worktree) / "automation" / "runs" / run.run_id / "state.json"
         classification = "CONTEXT_EXHAUSTED" if run.rollover_count == 0 else "SUCCESS"
-        save_run(state_path, RunRecord.from_dict({**run.to_dict(), "status": "FAILED" if classification != "SUCCESS" else "VALIDATING", "error_classification": classification}))
+        save_run(state_path, RunRecord.from_dict({**run.to_dict(), "status": "FAILED" if classification != "SUCCESS" else "VALIDATING", "session_thread_id": f"session-{run.run_id}" if classification == "SUCCESS" else None, "error_classification": classification}))
         return {"error_classification": classification}
     dispatcher = Dispatcher(repository=repo, allowed_worktree_root=root, primary_runtime_worktree=repo,
-                            base_branch="automation/base", auth_directory=auth, runner_call=fake)
+                            base_branch="automation/base", auth_directory=auth, runner_call=fake, pipeline_call=_passed_pipeline)
     dispatcher.run(once=True)
     final = load_task(repo / "automation" / "tasks" / "context.json")
     assert final.status is TaskStatus.PASSED
@@ -105,4 +111,3 @@ def test_context_rollover_keeps_attempt_and_creates_continuation(dispatcher_fixt
     continuation = load_run(Path(final.worktree) / "automation" / "runs" / final.run_ids[-1] / "state.json")
     assert continuation.previous_run_id == final.run_ids[0]
     assert "AGENTS.md" in (Path(final.worktree) / "automation" / "runs" / final.run_ids[-1] / "HANDOFF.md").read_text()
-

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kalshi-stats.local/automation/reviewer-verdict.schema.json",
+  "title": "Automation V1 Independent Reviewer Verdict",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "findings"],
+  "properties": {
+    "verdict": {"enum": ["PASS", "CHANGES_REQUIRED", "BLOCKED"]},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "code", "summary", "detail"],
+        "properties": {
+          "severity": {"enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]},
+          "code": {"type": "string", "minLength": 1},
+          "summary": {"type": "string", "minLength": 1},
+          "detail": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

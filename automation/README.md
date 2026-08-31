@@ -215,3 +215,25 @@ continuation run with a bounded rollover count, and reconstructs context from
 disk. Exceeding the configured limit fails closed. A restarted dispatcher can
 resume durable quota waiting; an old `RUNNING` record is treated as ambiguous
 and blocked pending human review.
+
+## Phase C3 validation and independent review
+
+`src/kalshi_stats/automation_validation.py` provides one reusable mechanical
+gate set. It records machine-readable results and fails required gates closed,
+including protected database/evidence paths and secret-shaped changed content.
+It does not open the live research database or inspect protected host credential
+directories.
+
+`src/kalshi_stats/automation_pipeline.py` coordinates validation and
+`src/kalshi_stats/automation_review.py` defines the strict reviewer contract.
+Each reviewer is a new runner invocation with a distinct run/session ID,
+read-only instructions, the task specification, a redacted diff, and validation
+evidence. The coordinator snapshots the worktree around review, stores review
+JSON separately, and allows `PASS` only after all required gates pass. At most
+two `CHANGES_REQUIRED` repair cycles are allowed by default; repairs use fresh
+builder sessions and are fully revalidated before another fresh reviewer.
+
+`SECURITY_VIOLATION` and `DATABASE_INTEGRITY_FAILURE` stop without repair.
+Rate-limit waiting still delegates to C2A, and context exhaustion remains in the
+C2B continuation path. C3 performs no merge, deployment, runtime supervision,
+research experiment, or live-money operation.

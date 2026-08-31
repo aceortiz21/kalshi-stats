@@ -73,3 +73,23 @@ rate-limited run is durably marked `WAITING_FOR_QUOTA`, waits with bounded
 backoff without consuming another attempt, and launches a fresh bounded runner
 invocation when quota is available. The 12-hour default horizon fails closed.
 This does not implement a dispatcher, queue, or generalized context rollover.
+
+Phase C3 replaces the C2B success shortcut with required mechanical validation
+and a fresh independent reviewer. Structured reviewer verdicts and findings are
+stored separately from builder evidence; reviewer worktree mutation fails
+closed. `CHANGES_REQUIRED` permits at most two fresh builder repair sessions,
+each followed by all gates and another fresh reviewer. Security and database
+integrity failures are never repaired automatically. C2A remains the quota-wait
+owner and C2B remains the context-continuation owner.
+
+The mechanical validator covers compileall, full pytest, diff whitespace,
+relevant shell syntax, JSON/TOML parsing, task/worktree and changed-file policy,
+a changed-content secret diagnostic, and protected database/evidence checks.
+This is a development-task integrity foundation, not runtime supervision or a
+claim of complete research deployment safety. Items 10 through 16 remain open.
+
+The one authorized C3 canary returned `CHANGES_REQUIRED`. Its two HIGH findings
+were repaired and the full post-repair mechanical suite passes, but policy
+forbade a second canary in the same turn. Items 8 and 9 therefore remain
+unchecked until a separately authorized fresh builder/reviewer canary proves a
+PASS on the repaired implementation.

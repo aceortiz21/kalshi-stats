@@ -67,10 +67,10 @@ ALLOWED_TASK_TRANSITIONS: Mapping[TaskStatus, frozenset[TaskStatus]] = {
         }
     ),
     TaskStatus.VALIDATING: frozenset(
-        {TaskStatus.REVIEWING, TaskStatus.FAILED, TaskStatus.BLOCKED}
+        {TaskStatus.REVIEWING, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.WAITING_FOR_QUOTA}
     ),
     TaskStatus.REVIEWING: frozenset(
-        {TaskStatus.PASSED, TaskStatus.FAILED, TaskStatus.BLOCKED}
+        {TaskStatus.RUNNING, TaskStatus.PASSED, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.WAITING_FOR_QUOTA}
     ),
     TaskStatus.PASSED: frozenset({TaskStatus.ARCHIVED}),
     TaskStatus.FAILED: frozenset({TaskStatus.QUEUED, TaskStatus.ARCHIVED}),
@@ -78,6 +78,8 @@ ALLOWED_TASK_TRANSITIONS: Mapping[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.WAITING_FOR_QUOTA: frozenset(
         {
             TaskStatus.RUNNING,
+            TaskStatus.VALIDATING,
+            TaskStatus.REVIEWING,
             TaskStatus.FAILED,
             TaskStatus.BLOCKED,
             TaskStatus.ARCHIVED,
@@ -197,6 +199,7 @@ class TaskRecord:
     base_branch: str = "automation/phase-c2b-v1"
     current_run_id: str | None = None
     blocked_reason: str | None = None
+    base_sha: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", _coerce_status(self.status))
@@ -241,6 +244,8 @@ class TaskRecord:
             raise ValueError("current_run_id contains unsupported characters")
         if self.blocked_reason is not None and not isinstance(self.blocked_reason, str):
             raise ValueError("blocked_reason must be a string or null")
+        if self.base_sha is not None and not re.fullmatch(r"[0-9a-f]{40,64}", self.base_sha):
+            raise ValueError("base_sha must be a full hexadecimal object ID or null")
 
     @classmethod
     def create(
@@ -259,6 +264,7 @@ class TaskRecord:
         priority: TaskPriority | str = TaskPriority.NORMAL,
         prompt_path: str | None = None,
         base_branch: str = "automation/phase-c2b-v1",
+        base_sha: str | None = None,
         now: str | None = None,
     ) -> TaskRecord:
         timestamp = now or utc_now()
@@ -282,6 +288,7 @@ class TaskRecord:
             priority=priority,
             prompt_path=prompt_path,
             base_branch=base_branch,
+            base_sha=base_sha,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -308,6 +315,7 @@ class TaskRecord:
         values.setdefault("prompt_path", None)
         values.setdefault("current_run_id", values.get("run_ids", [None])[-1] if values.get("run_ids") else None)
         values.setdefault("blocked_reason", None)
+        values.setdefault("base_sha", None)
         values.pop("dependencies", None)
         return cls(**values)
 

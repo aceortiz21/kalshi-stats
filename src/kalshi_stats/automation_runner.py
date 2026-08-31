@@ -142,6 +142,8 @@ class RunnerConfig:
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
     environment_names: tuple[str, ...] = ()
     dry_run: bool = False
+    success_status: TaskStatus = TaskStatus.VALIDATING
+    success_next_action: str = "Run the separate mechanical validation and review pipeline."
 
     def __post_init__(self) -> None:
         if self.timeout_seconds < 1:
@@ -858,8 +860,8 @@ def execute_launch(plan: LaunchPlan) -> dict[str, Any]:
         "command_metadata": diagnostic,
     }
     if classification is ErrorClassification.SUCCESS:
-        status = TaskStatus.VALIDATING
-        next_action = "Run the separate mechanical validation and review pipeline."
+        status = plan.config.success_status
+        next_action = plan.config.success_next_action
     elif classification is ErrorClassification.RATE_LIMITED:
         status = TaskStatus.WAITING_FOR_QUOTA
         next_action = "Preserve this run for a future quota-aware supervisor."

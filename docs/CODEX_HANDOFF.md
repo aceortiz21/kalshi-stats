@@ -1388,3 +1388,30 @@ Result: PASS.
 Phase C1 is complete. Automatic context rollover, rate-limit handling,
 dispatch/scheduling, and the other unchecked checklist items remain Phase C2 or
 later work and were not started.
+
+---
+
+# Automation V1 Phase C3 — Independent Reviewer and Validation Gates
+
+Phase C3 removes the C2B behavior that advanced a successful builder directly
+through validation/review states. A task can now pass only after reusable
+mechanical gates and a distinct fresh reviewer session both succeed.
+
+New components:
+
+- `automation_validation.py`: compileall, full pytest, diff whitespace, shell
+  syntax, JSON/TOML parsing, task/worktree policy, changed-file policy,
+  secret-shaped changed-content diagnostics, and protected database/evidence
+  path checks;
+- `automation_review.py`: strict `PASS`, `CHANGES_REQUIRED`, or `BLOCKED`
+  results with `CRITICAL`, `HIGH`, `MEDIUM`, and `LOW` findings;
+- `automation_pipeline.py`: default maximum two fresh repair cycles, complete
+  revalidation, fresh reviewer sessions, and reviewer-mutation detection;
+- `reviewer-verdict.schema.json`: machine-readable reviewer output contract.
+
+Builder, repair-builder, and reviewer run/session identifiers are persisted
+separately. Security and database-integrity failures do not enter the repair
+loop. Quota handling remains delegated to C2A and context continuation to C2B.
+The validator checks changed protected evidence but does not claim runtime or
+complete research-deployment supervision. Main, deployment, runtime restart,
+research planning, ML Phase 3B, and real-money execution remain out of scope.

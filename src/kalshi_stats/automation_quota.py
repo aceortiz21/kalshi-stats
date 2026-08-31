@@ -34,7 +34,7 @@ def _record_with(run: Any, **changes: Any) -> Any:
     return run.__class__(**{**run.to_dict(), **changes})
 
 
-def _set_running(task_path: Path, run_path: Path, task: Any, run: Any) -> tuple[Any, Any]:
+def _set_active(task_path: Path, run_path: Path, task: Any, run: Any, active_status: TaskStatus) -> tuple[Any, Any]:
     if task.status is TaskStatus.QUEUED:
         task = transition_task(
             task,
@@ -45,15 +45,15 @@ def _set_running(task_path: Path, run_path: Path, task: Any, run: Any) -> tuple[
     elif task.status is TaskStatus.WAITING_FOR_QUOTA:
         task = transition_task(
             task,
-            TaskStatus.RUNNING,
+            active_status,
             next_action="Resume the bounded task runner after quota became available.",
             updated_at=max(task.updated_at, utc_now()),
         )
-    elif task.status is not TaskStatus.RUNNING:
-        raise ValueError(f"quota wrapper requires RUNNING or WAITING_FOR_QUOTA, got {task.status.value}")
+    elif task.status is not active_status:
+        raise ValueError(f"quota wrapper requires {active_status.value} or WAITING_FOR_QUOTA, got {task.status.value}")
     run = _record_with(
         run,
-        status=TaskStatus.RUNNING.value,
+        status=active_status.value,
         finished_at=None,
         error_classification=None,
         next_action=task.next_action,
@@ -92,6 +92,7 @@ def run_with_quota_wait(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.time,
     on_wait: Callable[[Any, Any], None] | None = None,
+    active_status: TaskStatus = TaskStatus.RUNNING,
 ) -> Mapping[str, Any]:
     """Delegate bounded invocations, retrying only the runner's RATE_LIMITED result."""
 
@@ -118,7 +119,7 @@ def run_with_quota_wait(
             if clock() - waiting_since >= max_wait_seconds:
                 return _fail_horizon(task_file, run_file, task, run)
 
-        task, run = _set_running(task_file, run_file, task, run)
+        task, run = _set_active(task_file, run_file, task, run, active_status)
         result = run_once(task, run)
         classification = _classification(result)
         if classification is not ErrorClassification.RATE_LIMITED:
@@ -140,6 +141,7 @@ def run_with_quota_wait(
             "waiting_since": waiting_since,
             "next_retry_at": now + delay,
             "backoff_index": backoff_index + 1,
+            "resume_status": active_status.value,
         }
         task = transition_task(
             task,

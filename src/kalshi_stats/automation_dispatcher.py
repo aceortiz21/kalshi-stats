@@ -14,6 +14,8 @@ import time
 from typing import Any, Callable, Iterator, Mapping
 
 from .automation_quota import run_with_quota_wait
+from .automation_pipeline import DEFAULT_MAX_REPAIR_CYCLES, PipelineDecision, run_review_pipeline
+from .automation_review import parse_reviewer_output, repair_prompt, reviewer_prompt
 from .automation_runner import (
     RunnerConfig,
     execute_launch,
@@ -40,6 +42,7 @@ from .automation_worktrees import (
     create_task_worktree,
     inspect_task_worktree,
 )
+from .automation_validation import run_mechanical_validation
 
 
 PRIORITY_ORDER = {TaskPriority.URGENT: 0, TaskPriority.HIGH: 1, TaskPriority.NORMAL: 2, TaskPriority.LOW: 3}
@@ -131,6 +134,8 @@ class Dispatcher:
         timeout_seconds: int = 7200,
         rollover_limit: int = DEFAULT_ROLLOVER_LIMIT,
         runner_call: Callable[[TaskRecord, RunRecord, RunnerConfig], Mapping[str, Any]] | None = None,
+        pipeline_call: Callable[[TaskRecord, RunRecord], PipelineDecision] | None = None,
+        max_repair_cycles: int = DEFAULT_MAX_REPAIR_CYCLES,
     ) -> None:
         self.repository = repository.resolve()
         self.allowed_worktree_root = allowed_worktree_root.resolve()
@@ -144,6 +149,10 @@ class Dispatcher:
             raise ValueError("rollover_limit cannot be negative")
         self.rollover_limit = rollover_limit
         self.runner_call = runner_call or self._run_runner
+        self.pipeline_call = pipeline_call or self._run_review_pipeline
+        if max_repair_cycles < 0:
+            raise ValueError("max_repair_cycles cannot be negative")
+        self.max_repair_cycles = max_repair_cycles
 
     def _load_tasks(self) -> list[TaskRecord]:
         directory = self.repository / "automation" / "tasks"
@@ -234,12 +243,30 @@ class Dispatcher:
 
     def _finish(self, task: TaskRecord, run: RunRecord, classification: ErrorClassification) -> TaskRecord:
         if classification is ErrorClassification.SUCCESS:
-            # C2B has no independent reviewer, but terminal state still follows
-            # the durable transition graph rather than bypassing it.
-            final_task = transition_task(task, TaskStatus.VALIDATING, next_action="Record the successful runner result.")
-            final_task = transition_task(final_task, TaskStatus.REVIEWING, next_action="Review the bounded runner evidence.")
-            final_task = transition_task(final_task, TaskStatus.PASSED, next_action="Task passed; preserve evidence for human review.")
-            final_run = replace(load_run(Path(task.worktree) / "automation" / "runs" / run.run_id / "state.json"), status=TaskStatus.PASSED, finished_at=utc_now(), error_classification=classification, next_action="Task passed.")
+            builder_run = load_run(Path(task.worktree) / "automation" / "runs" / run.run_id / "state.json")
+            if not builder_run.session_thread_id:
+                classification = ErrorClassification.INFRASTRUCTURE_FAILURE
+                final_task = transition_task(task, TaskStatus.FAILED, next_action="Builder session identity was not captured; fail closed.", last_error=classification.value)
+                final_run = replace(builder_run, status=TaskStatus.FAILED, error_classification=classification, next_action="Builder session identity missing.")
+            else:
+                validating = transition_task(task, TaskStatus.VALIDATING, next_action="Run required mechanical validation gates.")
+                self._save_task_everywhere(validating)
+                decision = self.pipeline_call(validating, builder_run)
+                if decision.status == "PASSED":
+                    reviewing = load_task(_task_path(self.repository, task))
+                    if reviewing.status is TaskStatus.VALIDATING:
+                        reviewing = transition_task(reviewing, TaskStatus.REVIEWING, next_action="Record independent reviewer PASS.")
+                    final_task = transition_task(reviewing, TaskStatus.PASSED, next_action="Task passed validation and independent review.")
+                    final_run = replace(builder_run, status=TaskStatus.PASSED, finished_at=utc_now(), error_classification=ErrorClassification.SUCCESS, next_action="Task passed independent review.")
+                elif decision.status == "BLOCKED":
+                    current = load_task(_task_path(self.repository, task))
+                    final_task = transition_task(current, TaskStatus.BLOCKED, next_action="Human investigation required; review pipeline stopped.", last_error=decision.classification.value)
+                    final_task = replace(final_task, blocked_reason=decision.reason or decision.classification.value)
+                    final_run = replace(builder_run, status=TaskStatus.BLOCKED, error_classification=decision.classification, next_action="Review pipeline blocked fail closed.")
+                else:
+                    current = load_task(_task_path(self.repository, task))
+                    final_task = transition_task(current, TaskStatus.FAILED, next_action="Preserve validation/review evidence for human review.", last_error=decision.classification.value)
+                    final_run = replace(builder_run, status=TaskStatus.FAILED, error_classification=decision.classification, next_action="Review pipeline failed.")
         elif classification in {ErrorClassification.SECURITY_VIOLATION, ErrorClassification.DATABASE_INTEGRITY_FAILURE}:
             final_task = transition_task(task, TaskStatus.BLOCKED, next_action="Human investigation required; automation stopped.", last_error=classification.value)
             final_task = replace(final_task, blocked_reason=classification.value)
@@ -252,8 +279,91 @@ class Dispatcher:
         _event(self.repository, f"task.{final_task.status.value.lower()}", final_task, run_id=run.run_id, classification=classification.value)
         return final_task
 
+    def _run_review_pipeline(self, task: TaskRecord, builder_run: RunRecord) -> PipelineDecision:
+        worktree = Path(task.worktree)
+        evidence = worktree / "automation" / "runs" / builder_run.run_id
+
+        def validate(current_task: TaskRecord, current_run: RunRecord, cycle: int):
+            report_path = evidence / f"mechanical-validation-{cycle}.json"
+            report = run_mechanical_validation(current_task, worktree=worktree, output_path=report_path)
+            state_path = worktree / "automation" / "runs" / current_run.run_id / "state.json"
+            persisted = load_run(state_path)
+            results = dict(persisted.validation_results)
+            results["mechanical"] = report.to_dict()
+            save_run(state_path, replace(persisted, validation_results=results, files_changed=report.changed_files))
+            return report
+
+        def run_role(current_task: TaskRecord, prompt_text: str, run_id: str, status: TaskStatus, success_status: TaskStatus) -> tuple[RunRecord, ErrorClassification]:
+            nonlocal task
+            current = load_task(_task_path(self.repository, current_task))
+            if current.status is not status:
+                current = transition_task(current, status, next_action=f"Execute fresh {status.value.lower()} invocation.")
+            role_run = self._new_run(current, run_id)
+            role_run = replace(role_run, status=status, next_action=f"Execute fresh {status.value.lower()} invocation.")
+            current = replace(current, run_ids=current.run_ids + (run_id,), report_paths=current.report_paths + (f"automation/runs/{run_id}",), current_run_id=run_id, updated_at=utc_now())
+            self._save_task_everywhere(current)
+            prompt_path = worktree / "automation" / "tasks" / f"{run_id}.prompt.md"
+            _write_text_atomic(prompt_path, prompt_text)
+            run_dir = worktree / "automation" / "runs" / run_id
+            create_run_directory(run_dir, current, role_run)
+            config = RunnerConfig(
+                allowed_worktree_root=self.allowed_worktree_root,
+                primary_runtime_worktree=self.primary_runtime_worktree,
+                prompt_path=prompt_path, run_directory=run_dir,
+                auth_directory=self.auth_directory, image=self.image,
+                timeout_seconds=self.timeout_seconds, success_status=success_status,
+                success_next_action="Return control to the validation/review coordinator.",
+            )
+            result = run_with_quota_wait(
+                _task_path(worktree, current), run_dir / "state.json",
+                lambda active_task, active_run: self.runner_call(active_task, active_run, config),
+                active_status=status,
+            )
+            classification = ErrorClassification(result.get("error_classification", ErrorClassification.UNKNOWN_FAILURE.value))
+            return load_run(run_dir / "state.json"), classification
+
+        def review(current_task, current_run, validation, cycle):
+            current = load_task(_task_path(self.repository, current_task))
+            if current.status is TaskStatus.VALIDATING:
+                current = transition_task(current, TaskStatus.REVIEWING, next_action="Invoke a fresh independent reviewer.")
+                self._save_task_everywhere(current)
+            base_ref = task.base_sha or task.base_branch
+            diff_result = subprocess.run(("git", "-C", str(worktree), "diff", "--no-ext-diff", base_ref), capture_output=True, text=True, check=False)
+            if diff_result.returncode:
+                raise DispatcherFailure("unable to construct the complete reviewer diff from the durable base")
+            diff = diff_result.stdout
+            run_id = f"{task.task_id}-review-{cycle}"
+            reviewed, classification = run_role(current, reviewer_prompt(task, builder_run_id=current_run.run_id, validation_path=f"automation/runs/{builder_run.run_id}/mechanical-validation-{cycle}.json", diff_text=diff), run_id, TaskStatus.REVIEWING, TaskStatus.REVIEWING)
+            if classification is not ErrorClassification.SUCCESS or not reviewed.session_thread_id:
+                raise DispatcherFailure(f"independent reviewer failed: {classification.value}")
+            parsed = parse_reviewer_output((worktree / reviewed.final_response_path).read_text(encoding="utf-8"), reviewer_run_id=reviewed.run_id, reviewer_session_id=reviewed.session_thread_id, builder_run_id=current_run.run_id, builder_session_id=current_run.session_thread_id or "", repair_cycle=cycle)
+            _event(self.repository, "review.completed", current, builder_run_id=current_run.run_id, reviewer_run_id=reviewed.run_id, verdict=parsed.verdict.value, repair_cycle=cycle)
+            return parsed
+
+        def repair(current_task, review_result, cycle):
+            current = load_task(_task_path(self.repository, current_task))
+            run_id = f"{task.task_id}-repair-{cycle}"
+            repaired, classification = run_role(current, repair_prompt(task, review_result), run_id, TaskStatus.RUNNING, TaskStatus.VALIDATING)
+            _event(self.repository, "builder.repair", current, builder_run_id=repaired.run_id, reviewer_run_id=review_result.reviewer_run_id, repair_cycle=cycle, classification=classification.value)
+            if classification is ErrorClassification.SUCCESS:
+                running = load_task(_task_path(self.repository, current_task))
+                validating = (
+                    running
+                    if running.status is TaskStatus.VALIDATING
+                    else transition_task(running, TaskStatus.VALIDATING, next_action="Revalidate fresh builder repair.")
+                )
+                self._save_task_everywhere(validating)
+            return repaired, classification
+
+        decision = run_review_pipeline(task, builder_run, validate=validate, review=review, repair=repair, evidence_directory=evidence, max_repair_cycles=self.max_repair_cycles)
+        write_json_atomic(evidence / "pipeline-decision.json", decision.to_dict())
+        return decision
+
     def process_task(self, task: TaskRecord) -> TaskRecord:
         worktree = self._ensure_worktree(task)
+        if task.base_sha is None:
+            task = replace(task, base_sha=worktree.base_sha, updated_at=utc_now())
+            self._save_task_everywhere(task)
         prompt = self._prepare_task_inputs(task, worktree)
         if task.status is TaskStatus.QUEUED:
             task = transition_task(task, TaskStatus.RUNNING, next_action="Execute the bounded task through the quota-aware runner.")
