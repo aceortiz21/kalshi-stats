@@ -68,5 +68,11 @@
     },
     "last_error": {"type": ["string", "null"]},
     "next_action": {"type": "string", "minLength": 1}
+    ,"source": {"enum": ["USER", "SYSTEM"]}
+    ,"priority": {"enum": ["URGENT", "HIGH", "NORMAL", "LOW"]}
+    ,"prompt_path": {"type": ["string", "null"], "minLength": 1}
+    ,"base_branch": {"type": "string", "minLength": 1}
+    ,"current_run_id": {"type": ["string", "null"]}
+    ,"blocked_reason": {"type": ["string", "null"]}
   }
 }

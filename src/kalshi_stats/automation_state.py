@@ -30,6 +30,18 @@ class TaskStatus(str, Enum):
     ARCHIVED = "ARCHIVED"
 
 
+class TaskSource(str, Enum):
+    USER = "USER"
+    SYSTEM = "SYSTEM"
+
+
+class TaskPriority(str, Enum):
+    URGENT = "URGENT"
+    HIGH = "HIGH"
+    NORMAL = "NORMAL"
+    LOW = "LOW"
+
+
 class ErrorClassification(str, Enum):
     SUCCESS = "SUCCESS"
     RATE_LIMITED = "RATE_LIMITED"
@@ -179,9 +191,17 @@ class TaskRecord:
     report_paths: tuple[str, ...]
     last_error: str | None
     next_action: str
+    source: TaskSource = TaskSource.USER
+    priority: TaskPriority = TaskPriority.NORMAL
+    prompt_path: str | None = None
+    base_branch: str = "automation/phase-c2b-v1"
+    current_run_id: str | None = None
+    blocked_reason: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", _coerce_status(self.status))
+        object.__setattr__(self, "source", self.source if isinstance(self.source, TaskSource) else TaskSource(self.source))
+        object.__setattr__(self, "priority", self.priority if isinstance(self.priority, TaskPriority) else TaskPriority(self.priority))
         object.__setattr__(self, "prerequisites", tuple(self.prerequisites))
         object.__setattr__(self, "run_ids", tuple(self.run_ids))
         object.__setattr__(self, "report_paths", tuple(self.report_paths))
@@ -191,6 +211,9 @@ class TaskRecord:
         _require_text(self.title, "title")
         _require_text(self.objective, "objective")
         _validate_task_branch(self.branch)
+        _require_text(self.base_branch, "base_branch")
+        if self.base_branch in {"main", "automation-integration"}:
+            raise ValueError("base_branch cannot be main or automation-integration")
         _require_text(self.worktree, "worktree")
         _require_text(self.next_action, "next_action")
         if self.attempt_count < 0:
@@ -212,6 +235,12 @@ class TaskRecord:
                 raise ValueError(f"{field_name} entries must be non-empty strings")
         if self.last_error is not None and not isinstance(self.last_error, str):
             raise ValueError("last_error must be a string or null")
+        if self.prompt_path is not None:
+            _require_text(self.prompt_path, "prompt_path")
+        if self.current_run_id is not None and not _TASK_ID_PATTERN.fullmatch(self.current_run_id):
+            raise ValueError("current_run_id contains unsupported characters")
+        if self.blocked_reason is not None and not isinstance(self.blocked_reason, str):
+            raise ValueError("blocked_reason must be a string or null")
 
     @classmethod
     def create(
@@ -223,8 +252,13 @@ class TaskRecord:
         branch: str,
         worktree: str,
         prerequisites: tuple[str, ...] = (),
+        dependencies: tuple[str, ...] | None = None,
         max_attempts: int = 3,
         next_action: str = "Start task when prerequisites are satisfied.",
+        source: TaskSource | str = TaskSource.USER,
+        priority: TaskPriority | str = TaskPriority.NORMAL,
+        prompt_path: str | None = None,
+        base_branch: str = "automation/phase-c2b-v1",
         now: str | None = None,
     ) -> TaskRecord:
         timestamp = now or utc_now()
@@ -233,7 +267,7 @@ class TaskRecord:
             title=title,
             objective=objective,
             status=TaskStatus.QUEUED,
-            prerequisites=prerequisites,
+            prerequisites=tuple(dependencies if dependencies is not None else prerequisites),
             branch=branch,
             worktree=worktree,
             attempt_count=0,
@@ -244,18 +278,42 @@ class TaskRecord:
             report_paths=(),
             last_error=None,
             next_action=next_action,
+            source=source,
+            priority=priority,
+            prompt_path=prompt_path,
+            base_branch=base_branch,
         )
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["status"] = self.status.value
+        payload["source"] = self.source.value
+        payload["priority"] = self.priority.value
         for field_name in ("prerequisites", "run_ids", "report_paths"):
             payload[field_name] = list(payload[field_name])
         return payload
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> TaskRecord:
-        return cls(**dict(payload))
+        values = dict(payload)
+        # C1 records used prerequisites; C2B calls the same field dependencies.
+        if "prerequisites" not in values and "dependencies" in values:
+            values["prerequisites"] = values["dependencies"]
+        if "source" not in values:
+            values["source"] = TaskSource.USER.value
+        if "priority" not in values:
+            values["priority"] = TaskPriority.NORMAL.value
+        if "base_branch" not in values:
+            values["base_branch"] = "automation/phase-c2b-v1"
+        values.setdefault("prompt_path", None)
+        values.setdefault("current_run_id", values.get("run_ids", [None])[-1] if values.get("run_ids") else None)
+        values.setdefault("blocked_reason", None)
+        values.pop("dependencies", None)
+        return cls(**values)
+
+    @property
+    def dependencies(self) -> tuple[str, ...]:
+        return self.prerequisites
 
 
 @dataclass(frozen=True)
@@ -274,6 +332,8 @@ class RunRecord:
     jsonl_log_path: str
     error_classification: ErrorClassification | None
     next_action: str
+    rollover_count: int = 0
+    previous_run_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", _coerce_status(self.status))
@@ -305,6 +365,10 @@ class RunRecord:
             raise ValueError("session_thread_id must be non-empty or null")
         if any(not isinstance(path, str) or not path for path in self.files_changed):
             raise ValueError("files_changed entries must be non-empty strings")
+        if self.rollover_count < 0:
+            raise ValueError("rollover_count cannot be negative")
+        if self.previous_run_id is not None and not _TASK_ID_PATTERN.fullmatch(self.previous_run_id):
+            raise ValueError("previous_run_id contains unsupported characters")
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)

@@ -189,3 +189,29 @@ requires exact output, populated JSONL/final evidence, recorded zero exit,
 This is a single infrastructure canary path, not a dispatcher, general mechanical
 validation pipeline, retry/resume supervisor, reviewer pipeline, runtime
 supervisor, integration merger, research planner, or ML Phase 3B resumption.
+
+## Phase C2B dispatcher
+
+`src/kalshi_stats/automation_dispatcher.py` is a host-side single-worker
+dispatcher. It locks the queue with an OS file lock, recovers ambiguous
+`RUNNING` records as `BLOCKED`, selects `QUEUED` tasks by priority/creation
+time/task ID after all prerequisites are `PASSED`, creates the task branch and
+worktree, and creates the six-file run contract. It delegates every execution
+to `run_with_quota_wait`; it does not invoke Codex directly. A failed
+dependency is never runnable, and `WAITING_FOR_QUOTA` is resumed as the same
+attempt rather than duplicated.
+
+The minimal user interface is:
+
+```text
+PYTHONPATH=src python -m kalshi_stats.automation_cli submit --title TITLE --spec SPEC.md
+PYTHONPATH=src python -m kalshi_stats.automation_cli list
+PYTHONPATH=src python -m kalshi_stats.automation_cli status TASK_ID
+PYTHONPATH=src python -m kalshi_stats.automation_cli run [--once|--continuous]
+```
+
+`CONTEXT_EXHAUSTED` preserves the prior run and handoff, creates a fresh
+continuation run with a bounded rollover count, and reconstructs context from
+disk. Exceeding the configured limit fails closed. A restarted dispatcher can
+resume durable quota waiting; an old `RUNNING` record is treated as ambiguous
+and blocked pending human review.

@@ -77,6 +77,8 @@
         null
       ]
     },
-    "next_action": {"type": "string", "minLength": 1}
+    "next_action": {"type": "string", "minLength": 1},
+    "rollover_count": {"type": "integer", "minimum": 0},
+    "previous_run_id": {"type": ["string", "null"]}
   }
 }

@@ -91,6 +91,7 @@ def run_with_quota_wait(
     max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.time,
+    on_wait: Callable[[Any, Any], None] | None = None,
 ) -> Mapping[str, Any]:
     """Delegate bounded invocations, retrying only the runner's RATE_LIMITED result."""
 
@@ -157,4 +158,6 @@ def run_with_quota_wait(
         )
         save_task(task_file, task)
         save_run(run_file, run)
+        if on_wait is not None:
+            on_wait(task, run)
         backoff_index += 1
