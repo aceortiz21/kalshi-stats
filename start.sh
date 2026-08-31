@@ -381,6 +381,19 @@ fi
 
 
 # ============================================================
+# Predeclared forward Strategy Zoo
+# ============================================================
+
+echo "Registering forward Strategy Zoo..."
+
+PYTHONPATH=src "$PYTHON" \
+    -m kalshi_stats.strategy_zoo \
+    --db "$DB" \
+    --once
+
+
+
+# ============================================================
 # Realistic Kalshi PaperBroker
 # ============================================================
 

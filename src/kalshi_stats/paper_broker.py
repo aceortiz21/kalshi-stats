@@ -17,6 +17,13 @@ from .database import (
     init_db,
 )
 
+from .strategy_zoo import (
+    EXIT_RULES,
+    grid_strategy_key,
+    price_band_for,
+    time_band_for,
+)
+
 
 DEFAULT_STARTING_CASH = 10.0
 DEFAULT_TRADE_NOTIONAL = 1.00
@@ -191,6 +198,98 @@ def side_book(
                 )
             ),
     }
+
+
+def fill_adjusted_exit_prices(
+    trade,
+    fill_price,
+):
+    """
+    For delta-based strategies, TP/SL must be
+    calculated from the ACTUAL simulated fill,
+    not the earlier signal/reference quote.
+
+    Micro multiplier targets remain absolute.
+    Settlement strategies have no TP/SL.
+    """
+
+    family = str(
+        trade[
+            "family"
+        ]
+    )
+
+    original_entry = float(
+        trade[
+            "entry_limit"
+        ]
+    )
+
+    tp = (
+        None
+        if trade[
+            "tp_price"
+        ]
+        is None
+        else float(
+            trade[
+                "tp_price"
+            ]
+        )
+    )
+
+    sl = (
+        None
+        if trade[
+            "sl_price"
+        ]
+        is None
+        else float(
+            trade[
+                "sl_price"
+            ]
+        )
+    )
+
+    delta_based = family in {
+        "MAIN_TRIGGER",
+        "MAIN_CONTEXT",
+        "GRID_V1",
+    }
+
+    if not delta_based:
+        return tp, sl
+
+    if tp is not None:
+        tp_delta = (
+            tp
+            - original_entry
+        )
+
+        tp = min(
+            1.0,
+            float(
+                fill_price
+            )
+            + tp_delta,
+        )
+
+    if sl is not None:
+        sl_delta = (
+            original_entry
+            - sl
+        )
+
+        sl = max(
+            0.0,
+            float(
+                fill_price
+            )
+            - sl_delta,
+        )
+
+    return tp, sl
+
 
 
 def ensure_accounts(
@@ -723,6 +822,251 @@ def discover_micro_signals(
     return inserted
 
 
+def discover_grid_signals(
+    connection,
+    *,
+    now_ms,
+):
+    """
+    Generate one forward paper entry per
+    strategy / market / side.
+
+    The source is the synchronized 1-second
+    market_feature_snapshots table.
+    """
+
+    registry_rows = connection.execute(
+        """
+        SELECT
+            registry.strategy_key,
+            registry.shadow_start_ms,
+
+            accounts.created_at_ms
+                AS account_created_at_ms
+
+        FROM shadow_strategy_registry
+            AS registry
+
+        JOIN paper_accounts
+            AS accounts
+
+          ON accounts.strategy_key
+             =
+             registry.strategy_key
+
+        WHERE registry.family = 'GRID_V1'
+          AND registry.enabled = 1
+          AND accounts.enabled = 1
+        """
+    ).fetchall()
+
+    if not registry_rows:
+        return 0
+
+    allowed = {}
+
+    for row in registry_rows:
+        allowed[
+            str(
+                row[
+                    "strategy_key"
+                ]
+            )
+        ] = max(
+            int(
+                row[
+                    "shadow_start_ms"
+                ]
+            ),
+
+            int(
+                row[
+                    "account_created_at_ms"
+                ]
+            ),
+        )
+
+    minimum_start = min(
+        allowed.values()
+    )
+
+    last_signal = connection.execute(
+        """
+        SELECT MAX(
+            signal_ts_ms
+        )
+
+        FROM paper_trades
+
+        WHERE family = 'GRID_V1'
+        """
+    ).fetchone()[0]
+
+    scan_start = (
+        minimum_start
+        if last_signal is None
+        else max(
+            minimum_start,
+            int(
+                last_signal
+            ),
+        )
+    )
+
+    snapshots = connection.execute(
+        """
+        SELECT *
+
+        FROM market_feature_snapshots
+
+        WHERE ts >= ?
+          AND ts <= ?
+
+        ORDER BY ts
+        """,
+        (
+            int(
+                scan_start
+            ),
+
+            int(
+                now_ms
+            ),
+        ),
+    ).fetchall()
+
+    inserted = 0
+
+    for snapshot in snapshots:
+        ts_ms = int(
+            snapshot[
+                "ts"
+            ]
+        )
+
+        timing = time_band_for(
+            snapshot[
+                "seconds_remaining"
+            ]
+        )
+
+        if timing is None:
+            continue
+
+        time_name = timing[0]
+
+        for side in (
+            "yes",
+            "no",
+        ):
+            entry = float(
+                snapshot[
+                    f"{side}_ask"
+                ]
+            )
+
+            pricing = price_band_for(
+                entry
+            )
+
+            if pricing is None:
+                continue
+
+            price_name = pricing[0]
+
+            for rule in EXIT_RULES:
+                strategy_key = (
+                    grid_strategy_key(
+                        price_name,
+                        time_name,
+                        rule[
+                            "id"
+                        ],
+                    )
+                )
+
+                start_ms = allowed.get(
+                    strategy_key
+                )
+
+                if start_ms is None:
+                    continue
+
+                if ts_ms < start_ms:
+                    continue
+
+                tp_delta = rule[
+                    "tp_delta"
+                ]
+
+                sl_delta = rule[
+                    "sl_delta"
+                ]
+
+                if tp_delta is None:
+                    tp_price = None
+                    sl_price = None
+
+                else:
+                    tp_price = (
+                        entry
+                        + float(
+                            tp_delta
+                        )
+                    )
+
+                    sl_price = (
+                        entry
+                        - float(
+                            sl_delta
+                        )
+                    )
+
+                    # Preserve the intended reward/risk
+                    # geometry rather than clipping it.
+                    if (
+                        tp_price > .99
+                        or sl_price < .01
+                    ):
+                        continue
+
+                inserted += insert_signal(
+                    connection,
+
+                    strategy_key=(
+                        strategy_key
+                    ),
+
+                    family="GRID_V1",
+
+                    signal_key=(
+                        f"grid:"
+                        f"{snapshot['market_ticker']}:"
+                        f"{side}"
+                    ),
+
+                    market_ticker=(
+                        snapshot[
+                            "market_ticker"
+                        ]
+                    ),
+
+                    side=side,
+
+                    signal_ts_ms=ts_ms,
+
+                    entry_limit=entry,
+
+                    tp_price=tp_price,
+                    sl_price=sl_price,
+
+                    now_ms=now_ms,
+                )
+
+    return inserted
+
+
+
 def discover_signals(
     connection,
     *,
@@ -756,6 +1100,7 @@ def discover_signals(
     ).fetchall()
 
     inserted = 0
+    grid_present = False
 
     for registry in rows:
         account = {
@@ -796,6 +1141,17 @@ def discover_signals(
                     now_ms=now_ms,
                 )
             )
+
+        elif family == "GRID_V1":
+            grid_present = True
+
+    if grid_present:
+        inserted += (
+            discover_grid_signals(
+                connection,
+                now_ms=now_ms,
+            )
+        )
 
     return inserted
 
@@ -1252,6 +1608,13 @@ def process_entries(
             changed += 1
             continue
 
+        effective_tp, effective_sl = (
+            fill_adjusted_exit_prices(
+                trade,
+                ask,
+            )
+        )
+
         entry_status = (
             "FILLED"
             if (
@@ -1327,6 +1690,9 @@ def process_entries(
 
                 entry_status = ?,
 
+                tp_price = ?,
+                sl_price = ?,
+
                 entry_first_fill_ts_ms = ?,
                 entry_done_ts_ms = ?,
 
@@ -1348,6 +1714,9 @@ def process_entries(
                 fee,
 
                 entry_status,
+
+                effective_tp,
+                effective_sl,
 
                 int(
                     book_row[

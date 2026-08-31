@@ -746,3 +746,70 @@ def test_paper_dashboard_signature_changes_with_equity():
     )
 
     assert first != second
+
+
+def test_delta_exits_follow_actual_fill():
+    from kalshi_stats.paper_broker import (
+        fill_adjusted_exit_prices,
+    )
+
+    trade = {
+        "family":
+            "MAIN_TRIGGER",
+
+        "entry_limit":
+            .67,
+
+        "tp_price":
+            .92,
+
+        "sl_price":
+            .62,
+    }
+
+    tp, sl = (
+        fill_adjusted_exit_prices(
+            trade,
+            .61,
+        )
+    )
+
+    assert round(
+        tp,
+        8,
+    ) == .86
+
+    assert round(
+        sl,
+        8,
+    ) == .56
+
+
+def test_micro_target_remains_absolute():
+    from kalshi_stats.paper_broker import (
+        fill_adjusted_exit_prices,
+    )
+
+    trade = {
+        "family":
+            "MICRO_MULTIPLIER",
+
+        "entry_limit":
+            .001,
+
+        "tp_price":
+            .005,
+
+        "sl_price":
+            None,
+    }
+
+    tp, sl = (
+        fill_adjusted_exit_prices(
+            trade,
+            .0008,
+        )
+    )
+
+    assert tp == .005
+    assert sl is None
