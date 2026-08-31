@@ -931,3 +931,189 @@ surface.
 
 Any model-selection process must preserve a future untouched
 evaluation period or use training-only internal chronology.
+
+---
+
+# ML Phase 2 Completed — Fixed Gradient Boost Settlement Baseline
+
+A fixed nonlinear settlement-probability experiment has now been
+completed.
+
+Implementation:
+
+- src/kalshi_stats/ml_gradient_boost_walkforward.py
+- supporting additions to src/kalshi_stats/ml_baselines.py
+- tests/test_ml_gradient_boost_walkforward.py
+
+Generated report:
+
+reports/ml_gradient_boost_walkforward.json
+
+## Model
+
+One configuration was frozen before viewing Phase 2 outcomes:
+
+HistGradientBoostingClassifier(
+    loss="log_loss",
+    learning_rate=0.05,
+    max_iter=200,
+    max_leaf_nodes=15,
+    max_depth=None,
+    min_samples_leaf=50,
+    l2_regularization=1.0,
+    max_features=1.0,
+    max_bins=255,
+    categorical_features=None,
+    early_stopping=False,
+    random_state=0,
+)
+
+No hyperparameter search or alternative configurations were run.
+
+## Dataset / Validation
+
+The experiment used:
+
+- 88,359 historical rows
+- 5,891 unique markets
+- 44,184 chronological test rows
+- 2,946 later test markets
+
+The same five market-level chronological folds used in the earlier
+ML phases were retained.
+
+The experiment used a new frozen read-only SQLite backup.
+
+## Aggregate Results
+
+Raw Kalshi midpoint:
+
+- Brier: ~0.140142
+- Log loss: ~0.421051
+- ECE: ~0.009342
+
+Linear MARKET_PLUS_STATE:
+
+- Brier: ~0.140235
+- Log loss: ~0.421258
+
+TREE_STATE_ONLY:
+
+- Brier: ~0.163696
+- Log loss: ~0.490389
+
+TREE_MARKET_PLUS_STATE:
+
+- Brier: ~0.141168
+- Log loss: ~0.423839
+- ECE: ~0.009550
+
+## Interpretation
+
+TREE_STATE_ONLY materially improved over linear STATE_ONLY on both
+metrics in aggregate and in every fold.
+
+Therefore nonlinear relationships among the stationary BTC/state
+features contain genuine historical settlement information.
+
+However TREE_STATE_ONLY remained substantially worse than Kalshi.
+
+TREE_MARKET_PLUS_STATE was worse than:
+
+- raw Kalshi;
+- linear MARKET_PLUS_STATE.
+
+Relative to raw Kalshi it was approximately:
+
+- +0.001026 worse Brier;
+- +0.002788 worse log loss.
+
+It beat raw Kalshi on BOTH Brier and log loss in only:
+
+1 of 5 chronological folds.
+
+Therefore the predeclared 5/5 stability condition failed.
+
+No stable probability improvement was demonstrated.
+
+No trading edge was demonstrated.
+
+## Calibration / Overconfidence
+
+TREE_MARKET_PLUS_STATE showed signs of overconfidence.
+
+In the final 0-60-second band it achieved slightly better Brier but
+worse log loss than raw Kalshi.
+
+Its probability range extended beyond the already-extreme Kalshi
+midpoint range.
+
+It generated thousands of predictions below 0.001 or above 0.999.
+
+It lost to raw Kalshi on both metrics in every contract-price band.
+
+## Settlement ML Conclusion For Current Phase
+
+Three settlement probability approaches have now been evaluated:
+
+1. Logistic V1
+2. Market-residual logistic
+3. Fixed gradient-boosted trees
+
+None demonstrated stable improvement over raw Kalshi.
+
+This does NOT prove exploitable edge is impossible.
+
+It does indicate that additional increasingly complex models on the
+same settlement target and same historical feature set should NOT be
+the immediate research priority.
+
+The next priority is trading-strategy/path modeling, especially
+scalping.
+
+## Next Major Research Direction
+
+The system should now model the outcome of ACTIONS rather than only
+settlement.
+
+Candidate action space should initially align with the existing
+predeclared strategy structure:
+
+- YES / NO
+- TP +5 / SL -5
+- TP +10 / SL -5
+- TP +15 / SL -5
+- TP +20 / SL -10
+- TP +25 / SL -10
+- settlement / hold
+
+The eventual question is:
+
+Given current market state, which candidate action has the highest
+conservative expected NET return?
+
+The system must also support:
+
+PASS
+
+when no action has demonstrated positive expected value.
+
+Historical action/path modeling must reuse strict chronological
+market-level validation and must explicitly account for the coarse
+historical quote resolution.
+
+Where TP/SL ordering cannot be determined reliably from historical
+observations, label the case ambiguous rather than inventing an
+ordering.
+
+Later high-resolution prospective quote/topbook data should provide a
+much stronger source for scalp/path models.
+
+## Current Test State
+
+After Phase 2:
+
+153 tests passed.
+
+Settlement ML should now be considered a completed baseline branch
+while research moves to strategy/path modeling.
