@@ -115,6 +115,14 @@ UNAVAILABLE_CANDIDATES = {
 }
 
 
+def market_midpoint(yes_bid_close: float, yes_ask_close: float) -> float:
+    """Return the fixed V1 contemporaneous Kalshi YES midpoint."""
+    midpoint = (float(yes_bid_close) + float(yes_ask_close)) / 2.0
+    if not 0.0 <= midpoint <= 1.0:
+        raise ValueError(f"invalid YES quote midpoint: {midpoint}")
+    return midpoint
+
+
 @dataclass(frozen=True)
 class MLDataset:
     feature_names: tuple[str, ...]
@@ -195,11 +203,7 @@ def build_ml_dataset(connection: sqlite3.Connection) -> MLDataset:
         ticker = str(row["market_ticker"])
         if ticker not in labels:
             continue
-        bid = float(row["yes_bid_close"])
-        ask = float(row["yes_ask_close"])
-        midpoint = (bid + ask) / 2.0
-        if not 0.0 <= midpoint <= 1.0:
-            raise ValueError(f"invalid YES quote midpoint for {ticker}: {midpoint}")
+        midpoint = market_midpoint(row["yes_bid_close"], row["yes_ask_close"])
         features.append(
             tuple(None if row[name] is None else float(row[name]) for name in FEATURE_COLUMNS)
         )

@@ -17,6 +17,14 @@ class ProbabilityMetrics:
     log_loss: float
 
 
+@dataclass(frozen=True)
+class MarketEqualProbabilityMetrics:
+    market_count: int
+    row_count: int
+    brier_score: float
+    log_loss: float
+
+
 def build_logistic_pipeline() -> Pipeline:
     return Pipeline(
         steps=[
@@ -56,6 +64,36 @@ def probability_metrics(
         sample_count=count,
         brier_score=brier / count,
         log_loss=loss / count,
+    )
+
+
+def market_equal_probability_metrics(
+    targets: Sequence[int],
+    probabilities: Sequence[float],
+    market_tickers: Sequence[str],
+) -> MarketEqualProbabilityMetrics:
+    """Average per-row probability scores within markets, then weight markets equally."""
+    if not (len(targets) == len(probabilities) == len(market_tickers)) or not targets:
+        raise ValueError("targets, probabilities, and tickers need equal non-zero length")
+    by_market: dict[str, tuple[list[int], list[float]]] = {}
+    for target, probability, ticker in zip(
+        targets, probabilities, market_tickers, strict=True
+    ):
+        market_targets, market_probabilities = by_market.setdefault(
+            str(ticker), ([], [])
+        )
+        market_targets.append(int(target))
+        market_probabilities.append(float(probability))
+    per_market = []
+    for ticker, (market_targets, market_probabilities) in by_market.items():
+        if len(set(market_targets)) != 1:
+            raise ValueError(f"market has inconsistent targets: {ticker}")
+        per_market.append(probability_metrics(market_targets, market_probabilities))
+    return MarketEqualProbabilityMetrics(
+        market_count=len(per_market),
+        row_count=len(targets),
+        brier_score=sum(item.brier_score for item in per_market) / len(per_market),
+        log_loss=sum(item.log_loss for item in per_market) / len(per_market),
     )
 
 
