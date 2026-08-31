@@ -128,6 +128,17 @@ def worktree_snapshot(root: Path) -> dict[str, str]:
 
 def _command_gate(root: Path, name: str, command: Sequence[str]) -> GateResult:
     environment = dict(os.environ)
+
+    # Validate using the code in the task worktree, even when the host
+    # controller itself was launched with a different PYTHONPATH.
+    task_src = str(root / "src")
+    existing_pythonpath = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = (
+        task_src
+        if not existing_pythonpath
+        else task_src + os.pathsep + existing_pythonpath
+    )
+
     configured_worktree = environment.get("GIT_WORK_TREE")
     if not configured_worktree or Path(configured_worktree).resolve() != root.resolve():
         environment.pop("GIT_DIR", None)

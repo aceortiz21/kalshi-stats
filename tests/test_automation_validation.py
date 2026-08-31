@@ -37,3 +37,35 @@ def test_exact_base_sha_survives_missing_base_branch_ref(tmp_path):
     (root / "task.txt").write_text("task\n")
     assert changed_files(root, base_sha) == ("task.txt",)
 GIT_ENV = {key: value for key, value in os.environ.items() if key not in {"GIT_DIR", "GIT_WORK_TREE"}}
+
+def test_command_gate_imports_task_worktree_src_before_host_pythonpath(
+    tmp_path, monkeypatch
+):
+    import sys
+    from kalshi_stats.automation_validation import _command_gate
+
+    root = tmp_path / "task"
+    src = root / "src"
+    src.mkdir(parents=True)
+
+    (src / "worktree_only_module.py").write_text(
+        "VALUE = 'task-worktree'\n",
+        encoding="utf-8",
+    )
+
+    external = tmp_path / "external"
+    external.mkdir()
+    monkeypatch.setenv("PYTHONPATH", str(external))
+
+    result = _command_gate(
+        root,
+        "task_worktree_import",
+        (
+            sys.executable,
+            "-c",
+            "import worktree_only_module; "
+            "assert worktree_only_module.VALUE == 'task-worktree'",
+        ),
+    )
+
+    assert result.passed, result.detail
