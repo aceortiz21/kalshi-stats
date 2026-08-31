@@ -2410,12 +2410,48 @@ def render_paper_trading_lab(
     if not paper:
         return ""
 
-    accounts = list(
+    all_accounts = list(
         paper.get(
             "accounts",
             [],
         )
     )
+
+    # The dashboard is a live overview, not the
+    # exhaustive research export. Showing hundreds
+    # of constantly re-sorted rows causes expensive
+    # DOM replacement and visible page movement.
+    accounts = [
+        row
+        for row
+        in all_accounts
+        if (
+            int(
+                row.get(
+                    "signals",
+                    0,
+                )
+                or 0
+            )
+            > 0
+            or int(
+                row.get(
+                    "open",
+                    0,
+                )
+                or 0
+            )
+            > 0
+            or int(
+                row.get(
+                    "no_fill",
+                    0,
+                )
+                or 0
+            )
+            > 0
+        )
+    ][:100]
 
     recent = list(
         paper.get(
@@ -2745,6 +2781,7 @@ def render_paper_trading_lab(
         padding:14px;
         width:100%;
         box-sizing:border-box;
+        overflow-anchor:none;
     ">
 
       <div style="
@@ -2859,7 +2896,23 @@ def render_paper_trading_lab(
 
       </div>
 
-      <div style="overflow-x:auto;">
+      <div style="
+          margin:0 0 7px 0;
+          font-size:11px;
+          opacity:.68;
+      ">
+        Showing up to 100 strategies with live activity.
+        The full 721-strategy state is available in the
+        paper-engine snapshot export.
+      </div>
+
+      <div style="
+          overflow:auto;
+          max-height:540px;
+          border:
+              1px solid rgba(127,127,127,.18);
+          border-radius:8px;
+      ">
         <table style="
             min-width:900px;
             font-size:12px;
@@ -3558,7 +3611,7 @@ async function refreshLiveMarket() {
            * Personal account information changes much
            * more slowly than market quotes.
            *
-           * Refresh it at most every five seconds and
+           * Refresh it at most every fifteen seconds and
            * NEVER while the history dropdown is open
            * or the user is interacting with it.
            */
@@ -3581,7 +3634,7 @@ async function refreshLiveMarket() {
             (
               now -
               lastPersonalLedgerRefreshMs
-              >= 5000
+              >= 15000
             )
           ) {
             const personalStartMarker =
