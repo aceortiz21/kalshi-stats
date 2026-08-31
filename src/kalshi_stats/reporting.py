@@ -1224,22 +1224,47 @@ def _health_age(
 def _render_health_strip(
     health,
 ) -> str:
-    """Render low-prominence operational status."""
-
     if not health:
         return ""
 
-    status = str(
+    live_status = str(
         health.get(
-            "status",
+            "live_status",
             "UNKNOWN",
         )
     )
 
-    ws_text = (
-        "WS CONNECTED"
-        if health.get("ws_connected")
-        else "WS RECONNECTING"
+    research_status = str(
+        health.get(
+            "research_status",
+            "UNKNOWN",
+        )
+    )
+
+    def status_style(
+        status,
+    ):
+        if status == "GOOD":
+            return (
+                "color:#0d6b53;"
+                "font-weight:800;"
+            )
+
+        if status == "WARNING":
+            return (
+                "color:#8a6413;"
+                "font-weight:800;"
+            )
+
+        return (
+            "color:#9d2d2d;"
+            "font-weight:800;"
+        )
+
+    ws_connected = bool(
+        health.get(
+            "ws_connected"
+        )
     )
 
     latency = health.get(
@@ -1316,48 +1341,99 @@ def _render_health_strip(
         or 0
     )
 
-    issues = health.get(
-        "issues",
-        [],
-    )
-
-    issue_html = ""
-
-    if issues:
-        issue_text = " · ".join(
-            html.escape(str(issue))
-            for issue in issues[:2]
-        )
-
-        issue_html = (
-            '<span style="font-weight:700;">'
-            f' · {issue_text}'
-            '</span>'
-        )
-
     return f"""
     <div style="
-        margin:0 0 10px 0;
-        padding:5px 8px;
-        border-bottom:
-            1px solid rgba(127,127,127,.22);
-        font-size:11px;
-        line-height:1.35;
-        opacity:.72;
+        display:grid;
+        grid-template-columns:
+            repeat(auto-fit,minmax(220px,1fr));
+        gap:8px;
+        margin-bottom:10px;
+        font-size:12px;
     ">
-      <strong>
-        DATA {html.escape(status)}
-      </strong>
-      · {ws_text} {latency_text}
-      · MARKETS {recent}/{expected}
-      · CANDLES {complete}/{settled}
-      · HIGH-RES {quote_markets}
-      · PENDING {pending}
-      · MODEL v{model_number}
-      · NEW {model_pending}
-      {issue_html}
+
+      <div style="
+          border:1px solid rgba(127,127,127,.25);
+          border-radius:9px;
+          padding:9px 11px;
+      ">
+        <div style="
+            font-size:10px;
+            letter-spacing:.08em;
+            text-transform:uppercase;
+            opacity:.65;
+        ">
+          Live execution feed
+        </div>
+
+        <strong style="
+            {status_style(live_status)}
+            font-size:15px;
+        ">
+          {html.escape(live_status)}
+        </strong>
+
+        <div style="margin-top:3px;opacity:.72;">
+          WS {'UP' if ws_connected else 'DOWN'}
+          · latency {latency_text}
+        </div>
+      </div>
+
+      <div style="
+          border:1px solid rgba(127,127,127,.25);
+          border-radius:9px;
+          padding:9px 11px;
+      ">
+        <div style="
+            font-size:10px;
+            letter-spacing:.08em;
+            text-transform:uppercase;
+            opacity:.65;
+        ">
+          24h research coverage
+        </div>
+
+        <strong style="
+            {status_style(research_status)}
+            font-size:15px;
+        ">
+          {html.escape(research_status)}
+        </strong>
+
+        <div style="margin-top:3px;opacity:.72;">
+          markets {recent}/{expected}
+          · candles {complete}/{settled}
+          · high-res {quote_markets}/{expected}
+        </div>
+      </div>
+
+      <div style="
+          border:1px solid rgba(127,127,127,.25);
+          border-radius:9px;
+          padding:9px 11px;
+      ">
+        <div style="
+            font-size:10px;
+            letter-spacing:.08em;
+            text-transform:uppercase;
+            opacity:.65;
+        ">
+          Model / ingestion
+        </div>
+
+        <strong style="font-size:15px;">
+          v{model_number}
+        </strong>
+
+        <div style="margin-top:3px;opacity:.72;">
+          pending ingestion {pending}
+          · new markets {model_pending}
+        </div>
+      </div>
+
     </div>
     """
+
+
 
 
 def _render_brti_strip(
@@ -1636,6 +1712,7 @@ def _render_brti_strip(
       </div>
     </section>
     """
+
 
 
 def _money(

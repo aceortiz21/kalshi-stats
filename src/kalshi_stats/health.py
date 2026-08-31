@@ -177,16 +177,40 @@ def build_data_health(
         """
         SELECT
             COUNT(
-                DISTINCT market_ticker
+                DISTINCT CASE
+                    WHEN markets.ticker IS NOT NULL
+                    THEN quote_snapshots.market_ticker
+                END
             ) AS recent_markets,
-            MAX(collected_at)
-                AS last_snapshot,
-            MIN(collected_at)
-                AS first_snapshot
+
+            MAX(
+                quote_snapshots.collected_at
+            ) AS last_snapshot,
+
+            MIN(
+                quote_snapshots.collected_at
+            ) AS first_snapshot
+
         FROM quote_snapshots
-        WHERE collected_at >= ?
+
+        LEFT JOIN markets
+          ON markets.ticker
+             =
+             quote_snapshots.market_ticker
+
+         AND markets.series_ticker = ?
+
+         AND markets.close_time >= ?
+         AND markets.close_time <= ?
+
+        WHERE quote_snapshots.collected_at >= ?
         """,
-        (cutoff_text,),
+        (
+            series_ticker,
+            cutoff_text,
+            now_text,
+            cutoff_text,
+        ),
     ).fetchone()
 
     recent_quote_markets = int(
@@ -400,8 +424,73 @@ def build_data_health(
         status = "GOOD"
         issues = []
 
+    # --------------------------------------------------------
+    # Separate CURRENT EXECUTION health from
+    # rolling RESEARCH DATA coverage.
+    # --------------------------------------------------------
+
+    live_bad = bool(
+        last_event_latency_ms is not None
+        and last_event_latency_ms >= 10_000
+    )
+
+    live_warning = bool(
+        (
+            current_market_ticker
+            and not ws_connected
+        )
+        or (
+            last_event_latency_ms is not None
+            and last_event_latency_ms >= 2_000
+        )
+    )
+
+    if live_bad:
+        live_status = "BAD"
+    elif live_warning:
+        live_status = "WARNING"
+    else:
+        live_status = "GOOD"
+
+    research_bad = bool(
+        pending_finalizations >= 8
+        or incomplete_candles >= 4
+        or missing_recent_markets >= 4
+        or (
+            quote_coverage_mature
+            and quote_gap_markets >= 4
+        )
+    )
+
+    research_warning = bool(
+        pending_finalizations >= 3
+        or incomplete_candles > 0
+        or missing_recent_markets > 1
+        or (
+            quote_coverage_mature
+            and quote_gap_markets > 1
+        )
+        or (
+            model_age_seconds is not None
+            and model_age_seconds >= 72 * 3600
+        )
+    )
+
+    if research_bad:
+        research_status = "BAD"
+    elif research_warning:
+        research_status = "WARNING"
+    else:
+        research_status = "GOOD"
+
     return {
         "status": status,
+
+        "live_status":
+            live_status,
+
+        "research_status":
+            research_status,
         "issues": issues,
         "recent_markets": (
             recent_markets

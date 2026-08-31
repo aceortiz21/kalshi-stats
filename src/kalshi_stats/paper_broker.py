@@ -24,6 +24,15 @@ from .strategy_zoo import (
     time_band_for,
 )
 
+from .tail_zoo import (
+    HIGH_BANDS,
+    HIGH_RULES,
+    LOW_BANDS,
+    LOW_TARGET_MULTIPLIERS,
+    TIME_BANDS as TAIL_TIME_BANDS,
+    tail_strategy_key,
+)
+
 
 DEFAULT_STARTING_CASH = 10.0
 DEFAULT_TRADE_NOTIONAL = 1.00
@@ -251,10 +260,33 @@ def fill_adjusted_exit_prices(
         )
     )
 
+    if (
+        family == "TAIL_V1"
+        and tp is not None
+        and sl is None
+        and original_entry > 0
+    ):
+        multiplier = (
+            tp
+            / original_entry
+        )
+
+        return (
+            min(
+                .999,
+                float(
+                    fill_price
+                )
+                * multiplier,
+            ),
+            None,
+        )
+
     delta_based = family in {
         "MAIN_TRIGGER",
         "MAIN_CONTEXT",
         "GRID_V1",
+        "TAIL_V1",
     }
 
     if not delta_based:
@@ -822,6 +854,81 @@ def discover_micro_signals(
     return inserted
 
 
+def paper_scan_start(
+    connection,
+    *,
+    family,
+    minimum_start,
+):
+    row = connection.execute(
+        """
+        SELECT last_ts_ms
+        FROM paper_scan_cursors
+        WHERE family = ?
+        """,
+        (
+            family,
+        ),
+    ).fetchone()
+
+    if row is None:
+        return int(
+            minimum_start
+        )
+
+    return max(
+        int(
+            minimum_start
+        ),
+        int(
+            row[
+                "last_ts_ms"
+            ]
+        )
+        + 1,
+    )
+
+
+def update_paper_scan_cursor(
+    connection,
+    *,
+    family,
+    last_ts_ms,
+    now_ms,
+):
+    connection.execute(
+        """
+        INSERT INTO paper_scan_cursors (
+            family,
+            last_ts_ms,
+            updated_at_ms
+        )
+        VALUES (?, ?, ?)
+
+        ON CONFLICT(family)
+        DO UPDATE SET
+            last_ts_ms =
+                MAX(
+                    paper_scan_cursors.last_ts_ms,
+                    excluded.last_ts_ms
+                ),
+
+            updated_at_ms =
+                excluded.updated_at_ms
+        """,
+        (
+            family,
+            int(
+                last_ts_ms
+            ),
+            int(
+                now_ms
+            ),
+        ),
+    )
+
+
+
 def discover_grid_signals(
     connection,
     *,
@@ -890,27 +997,10 @@ def discover_grid_signals(
         allowed.values()
     )
 
-    last_signal = connection.execute(
-        """
-        SELECT MAX(
-            signal_ts_ms
-        )
-
-        FROM paper_trades
-
-        WHERE family = 'GRID_V1'
-        """
-    ).fetchone()[0]
-
-    scan_start = (
-        minimum_start
-        if last_signal is None
-        else max(
-            minimum_start,
-            int(
-                last_signal
-            ),
-        )
+    scan_start = paper_scan_start(
+        connection,
+        family="GRID_V1",
+        minimum_start=minimum_start,
     )
 
     snapshots = connection.execute(
@@ -934,6 +1024,18 @@ def discover_grid_signals(
             ),
         ),
     ).fetchall()
+
+    if snapshots:
+        update_paper_scan_cursor(
+            connection,
+            family="GRID_V1",
+            last_ts_ms=(
+                snapshots[-1][
+                    "ts"
+                ]
+            ),
+            now_ms=now_ms,
+        )
 
     inserted = 0
 
@@ -1067,6 +1169,407 @@ def discover_grid_signals(
 
 
 
+def discover_tail_signals(
+    connection,
+    *,
+    now_ms,
+):
+    registry_rows = connection.execute(
+        """
+        SELECT
+            registry.strategy_key,
+            registry.shadow_start_ms,
+
+            accounts.created_at_ms
+                AS account_created_at_ms
+
+        FROM shadow_strategy_registry
+            AS registry
+
+        JOIN paper_accounts
+            AS accounts
+
+          ON accounts.strategy_key
+             =
+             registry.strategy_key
+
+        WHERE registry.family = 'TAIL_V1'
+          AND registry.enabled = 1
+          AND accounts.enabled = 1
+        """
+    ).fetchall()
+
+    if not registry_rows:
+        return 0
+
+    allowed = {}
+
+    for row in registry_rows:
+        allowed[
+            str(
+                row[
+                    "strategy_key"
+                ]
+            )
+        ] = max(
+            int(
+                row[
+                    "shadow_start_ms"
+                ]
+            ),
+
+            int(
+                row[
+                    "account_created_at_ms"
+                ]
+            ),
+        )
+
+    minimum_start = min(
+        allowed.values()
+    )
+
+    scan_start = paper_scan_start(
+        connection,
+        family="TAIL_V1",
+        minimum_start=minimum_start,
+    )
+
+    snapshots = connection.execute(
+        """
+        SELECT *
+        FROM market_feature_snapshots
+
+        WHERE ts >= ?
+          AND ts <= ?
+
+        ORDER BY ts
+        """,
+        (
+            int(
+                scan_start
+            ),
+
+            int(
+                now_ms
+            ),
+        ),
+    ).fetchall()
+
+    if snapshots:
+        update_paper_scan_cursor(
+            connection,
+            family="TAIL_V1",
+            last_ts_ms=(
+                snapshots[-1][
+                    "ts"
+                ]
+            ),
+            now_ms=now_ms,
+        )
+
+    inserted = 0
+
+    def find_band(
+        value,
+        bands,
+    ):
+        value = float(
+            value
+        )
+
+        for (
+            name,
+            low,
+            high,
+        ) in bands:
+
+            if (
+                low
+                <= value
+                <= high
+            ):
+                return (
+                    name,
+                    low,
+                    high,
+                )
+
+        return None
+
+    for snapshot in snapshots:
+        ts_ms = int(
+            snapshot[
+                "ts"
+            ]
+        )
+
+        timing = find_band(
+            snapshot[
+                "seconds_remaining"
+            ],
+            TAIL_TIME_BANDS,
+        )
+
+        if timing is None:
+            continue
+
+        time_name = timing[0]
+
+        for side in (
+            "yes",
+            "no",
+        ):
+            entry = float(
+                snapshot[
+                    f"{side}_ask"
+                ]
+            )
+
+            low_band = find_band(
+                entry,
+                LOW_BANDS,
+            )
+
+            high_band = find_band(
+                entry,
+                HIGH_BANDS,
+            )
+
+            if (
+                low_band is None
+                and high_band is None
+            ):
+                continue
+
+            if low_band is not None:
+                price_name = (
+                    low_band[0]
+                )
+
+                for multiplier in (
+                    LOW_TARGET_MULTIPLIERS
+                ):
+                    exit_id = (
+                        "x"
+                        + str(
+                            multiplier
+                        ).replace(
+                            ".",
+                            "_"
+                        )
+                    )
+
+                    strategy_key = (
+                        tail_strategy_key(
+                            "LOW",
+                            price_name,
+                            time_name,
+                            exit_id,
+                        )
+                    )
+
+                    start_ms = allowed.get(
+                        strategy_key
+                    )
+
+                    if (
+                        start_ms is None
+                        or ts_ms < start_ms
+                    ):
+                        continue
+
+                    target = (
+                        entry
+                        * float(
+                            multiplier
+                        )
+                    )
+
+                    if target > .999:
+                        continue
+
+                    inserted += insert_signal(
+                        connection,
+
+                        strategy_key=(
+                            strategy_key
+                        ),
+
+                        family="TAIL_V1",
+
+                        signal_key=(
+                            f"tail:"
+                            f"{snapshot['market_ticker']}:"
+                            f"{side}"
+                        ),
+
+                        market_ticker=(
+                            snapshot[
+                                "market_ticker"
+                            ]
+                        ),
+
+                        side=side,
+
+                        signal_ts_ms=ts_ms,
+
+                        entry_limit=entry,
+
+                        tp_price=target,
+                        sl_price=None,
+
+                        now_ms=now_ms,
+                    )
+
+                strategy_key = (
+                    tail_strategy_key(
+                        "LOW",
+                        price_name,
+                        time_name,
+                        "settle",
+                    )
+                )
+
+                start_ms = allowed.get(
+                    strategy_key
+                )
+
+                if (
+                    start_ms is not None
+                    and ts_ms >= start_ms
+                ):
+                    inserted += insert_signal(
+                        connection,
+
+                        strategy_key=(
+                            strategy_key
+                        ),
+
+                        family="TAIL_V1",
+
+                        signal_key=(
+                            f"tail:"
+                            f"{snapshot['market_ticker']}:"
+                            f"{side}"
+                        ),
+
+                        market_ticker=(
+                            snapshot[
+                                "market_ticker"
+                            ]
+                        ),
+
+                        side=side,
+
+                        signal_ts_ms=ts_ms,
+
+                        entry_limit=entry,
+
+                        tp_price=None,
+                        sl_price=None,
+
+                        now_ms=now_ms,
+                    )
+
+            if high_band is not None:
+                price_name = (
+                    high_band[0]
+                )
+
+                for rule in HIGH_RULES:
+                    strategy_key = (
+                        tail_strategy_key(
+                            "HIGH",
+                            price_name,
+                            time_name,
+                            rule[
+                                "id"
+                            ],
+                        )
+                    )
+
+                    start_ms = allowed.get(
+                        strategy_key
+                    )
+
+                    if (
+                        start_ms is None
+                        or ts_ms < start_ms
+                    ):
+                        continue
+
+                    if (
+                        rule[
+                            "tp_delta"
+                        ]
+                        is None
+                    ):
+                        tp_price = None
+                        sl_price = None
+
+                    else:
+                        tp_price = (
+                            entry
+                            + float(
+                                rule[
+                                    "tp_delta"
+                                ]
+                            )
+                        )
+
+                        sl_price = (
+                            entry
+                            - float(
+                                rule[
+                                    "sl_delta"
+                                ]
+                            )
+                        )
+
+                        if (
+                            tp_price > .999
+                            or sl_price < .001
+                        ):
+                            continue
+
+                    inserted += insert_signal(
+                        connection,
+
+                        strategy_key=(
+                            strategy_key
+                        ),
+
+                        family="TAIL_V1",
+
+                        signal_key=(
+                            f"tail:"
+                            f"{snapshot['market_ticker']}:"
+                            f"{side}"
+                        ),
+
+                        market_ticker=(
+                            snapshot[
+                                "market_ticker"
+                            ]
+                        ),
+
+                        side=side,
+
+                        signal_ts_ms=ts_ms,
+
+                        entry_limit=entry,
+
+                        tp_price=tp_price,
+                        sl_price=sl_price,
+
+                        now_ms=now_ms,
+                    )
+
+    return inserted
+
+
+
 def discover_signals(
     connection,
     *,
@@ -1101,6 +1604,7 @@ def discover_signals(
 
     inserted = 0
     grid_present = False
+    tail_present = False
 
     for registry in rows:
         account = {
@@ -1145,9 +1649,20 @@ def discover_signals(
         elif family == "GRID_V1":
             grid_present = True
 
+        elif family == "TAIL_V1":
+            tail_present = True
+
     if grid_present:
         inserted += (
             discover_grid_signals(
+                connection,
+                now_ms=now_ms,
+            )
+        )
+
+    if tail_present:
+        inserted += (
+            discover_tail_signals(
                 connection,
                 now_ms=now_ms,
             )

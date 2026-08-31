@@ -850,6 +850,15 @@ ON paper_fills (
 
 
 
+CREATE TABLE IF NOT EXISTS paper_scan_cursors (
+    family TEXT PRIMARY KEY,
+
+    last_ts_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+
+
+
 CREATE TABLE IF NOT EXISTS fill_feature_snapshots (
     fill_id TEXT PRIMARY KEY,
 

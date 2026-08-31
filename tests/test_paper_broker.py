@@ -813,3 +813,37 @@ def test_micro_target_remains_absolute():
 
     assert tp == .005
     assert sl is None
+
+
+def test_tail_multiplier_follows_actual_fill():
+    from kalshi_stats.paper_broker import (
+        fill_adjusted_exit_prices,
+    )
+
+    trade = {
+        "family":
+            "TAIL_V1",
+
+        "entry_limit":
+            .002,
+
+        "tp_price":
+            .004,
+
+        "sl_price":
+            None,
+    }
+
+    tp, sl = (
+        fill_adjusted_exit_prices(
+            trade,
+            .0015,
+        )
+    )
+
+    assert round(
+        tp,
+        8,
+    ) == .003
+
+    assert sl is None

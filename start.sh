@@ -394,6 +394,19 @@ PYTHONPATH=src "$PYTHON" \
 
 
 # ============================================================
+# Predeclared extreme-price Tail Zoo
+# ============================================================
+
+echo "Registering forward Tail Zoo..."
+
+PYTHONPATH=src "$PYTHON" \
+    -m kalshi_stats.tail_zoo \
+    --db "$DB" \
+    --once
+
+
+
+# ============================================================
 # Realistic Kalshi PaperBroker
 # ============================================================
 

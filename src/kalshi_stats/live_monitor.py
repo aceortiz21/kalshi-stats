@@ -712,7 +712,10 @@ async def run_websocket_live_loop(
             ):
                 print(
                     "HEALTH | "
-                    f"{health_state.get('status')} | "
+                    f"LIVE="
+                    f"{health_state.get('live_status')} | "
+                    f"RESEARCH="
+                    f"{health_state.get('research_status')} | "
                     f"WS="
                     f"{'up' if ws_connected else 'down'} | "
                     f"24h markets="
@@ -722,7 +725,8 @@ async def run_websocket_live_loop(
                     f"{health_state.get('complete_candles')}/"
                     f"{health_state.get('recent_settled')} | "
                     f"high-res="
-                    f"{health_state.get('recent_quote_markets')} | "
+                    f"{health_state.get('recent_quote_markets')}/"
+                    f"{health_state.get('expected_recent_markets')} | "
                     f"pending="
                     f"{health_state.get('pending_finalizations')} | "
                     f"model=v"
