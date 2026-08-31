@@ -600,6 +600,78 @@ ON shadow_execution_intents (
 
 
 
+
+CREATE TABLE IF NOT EXISTS shadow_strategy_registry (
+    strategy_key TEXT PRIMARY KEY,
+
+    family TEXT NOT NULL,
+    version INTEGER NOT NULL,
+
+    description TEXT NOT NULL,
+    definition_json TEXT NOT NULL,
+
+    evidence_basis TEXT NOT NULL,
+
+    created_at_ms INTEGER NOT NULL,
+
+    discovery_cutoff_ms INTEGER,
+    shadow_start_ms INTEGER NOT NULL,
+
+    enabled INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS
+idx_shadow_strategy_registry_family
+ON shadow_strategy_registry (
+    family,
+    enabled
+);
+
+
+CREATE TABLE IF NOT EXISTS shadow_strategy_score_snapshots (
+    strategy_key TEXT NOT NULL,
+    snapshot_ts_ms INTEGER NOT NULL,
+
+    sample_n INTEGER NOT NULL,
+    unique_markets INTEGER NOT NULL,
+
+    wins INTEGER NOT NULL,
+    losses INTEGER NOT NULL,
+    breakeven INTEGER NOT NULL,
+
+    win_rate REAL,
+
+    avg_roi REAL,
+    median_roi REAL,
+    recent_20_avg_roi REAL,
+
+    cumulative_pnl_per_1 REAL NOT NULL,
+    max_drawdown_per_1 REAL NOT NULL,
+
+    status TEXT NOT NULL,
+
+    PRIMARY KEY (
+        strategy_key,
+        snapshot_ts_ms
+    ),
+
+    FOREIGN KEY (
+        strategy_key
+    )
+    REFERENCES shadow_strategy_registry(
+        strategy_key
+    )
+);
+
+CREATE INDEX IF NOT EXISTS
+idx_shadow_score_strategy_time
+ON shadow_strategy_score_snapshots (
+    strategy_key,
+    snapshot_ts_ms
+);
+
+
+
 CREATE TABLE IF NOT EXISTS fill_feature_snapshots (
     fill_id TEXT PRIMARY KEY,
 

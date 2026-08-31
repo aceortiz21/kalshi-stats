@@ -20,6 +20,7 @@ SYNC_SUPERVISOR_PID=""
 ACCOUNT_SUPERVISOR_PID=""
 PROSPECTIVE_SUPERVISOR_PID=""
 TRIGGER_SHADOW_SUPERVISOR_PID=""
+SHADOW_LAB_SUPERVISOR_PID=""
 
 if [[ ! -x "$PYTHON" ]]; then
     echo "ERROR: .venv Python not found."
@@ -157,6 +158,7 @@ cleanup() {
     echo
     echo "Stopping managed services..."
 
+    stop_supervisor "$SHADOW_LAB_SUPERVISOR_PID"
     stop_supervisor "$TRIGGER_SHADOW_SUPERVISOR_PID"
     stop_supervisor "$PROSPECTIVE_SUPERVISOR_PID"
     stop_supervisor "$ACCOUNT_SUPERVISOR_PID"
@@ -374,6 +376,35 @@ fi
 
 
 
+# ============================================================
+# Continuous multi-strategy Shadow Lab
+# ============================================================
+
+if pgrep -f \
+    'python.*-m kalshi_stats\.shadow_lab' \
+    >/dev/null 2>&1
+then
+    echo "Continuous Shadow Lab already running."
+else
+    : > reports/shadow_lab.log
+
+    supervise_service \
+        "Continuous Shadow Lab" \
+        "reports/shadow_lab.log" \
+        -m kalshi_stats.shadow_lab \
+        --db "$DB" \
+        --interval 30 \
+        > /dev/null 2>&1 &
+
+    SHADOW_LAB_SUPERVISOR_PID=$!
+
+    echo \
+        "Continuous Shadow Lab started " \
+        "(log: reports/shadow_lab.log)"
+fi
+
+
+
 echo
 echo "Dashboard:"
 echo "$URL"
@@ -408,6 +439,7 @@ echo "  Kalshi x BTC sync    reports/market_sync.log"
 echo "  Account tracking     reports/account_sync.log"
 echo "  Prospective logger   reports/prospective.log"
 echo "  Trigger shadow       reports/trigger_shadow.log"
+echo "  Continuous lab       reports/shadow_lab.log"
 echo
 echo "Press Ctrl+C to stop everything started here."
 echo
