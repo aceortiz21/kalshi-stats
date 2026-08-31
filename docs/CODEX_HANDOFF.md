@@ -1117,3 +1117,166 @@ After Phase 2:
 
 Settlement ML should now be considered a completed baseline branch
 while research moves to strategy/path modeling.
+
+---
+
+# ML Phase 3A Completed — Historical Action / Path Dataset V1
+
+Phase 3A created an ambiguity-aware historical action/path dataset
+for future strategy-selection and scalping ML.
+
+Implementation:
+
+- src/kalshi_stats/ml_action_dataset.py
+- tests/test_ml_action_dataset.py
+
+Generated report:
+
+- reports/ml_action_dataset_summary.json
+
+The generated report remains an ignored research artifact.
+
+## Canonical Action Space
+
+The frozen action space contains twelve actions:
+
+YES:
+- TP +5c / SL -5c
+- TP +10c / SL -5c
+- TP +15c / SL -5c
+- TP +20c / SL -10c
+- TP +25c / SL -10c
+- SETTLE
+
+NO:
+- TP +5c / SL -5c
+- TP +10c / SL -5c
+- TP +15c / SL -5c
+- TP +20c / SL -10c
+- TP +25c / SL -10c
+- SETTLE
+
+Action identity describes the trade itself rather than a GRID
+strategy ID.
+
+## Historical Execution Semantics
+
+Entry:
+
+- YES uses sampled yes_ask_close
+- NO uses 1 - yes_bid_close
+
+Future YES exits use YES bid OHLC.
+
+Future NO exits use reciprocal YES ask OHLC.
+
+Only observations strictly after observed_ts determine path labels.
+
+TP fills use the target price approximation.
+
+SL labels can use candle lows to establish that a stop was crossed.
+
+If only the intra-candle low establishes the stop and the sampled
+close does not provide a defensible executable price, the SL class is
+preserved but exit price and P&L remain unknown.
+
+Settlement labels use completed settlement only after the market
+finishes.
+
+Settlement information is excluded from model input features.
+
+## Ambiguity
+
+If a one-minute future candle crosses both TP and SL, ordering cannot
+be established.
+
+Such rows are labeled:
+
+AMBIGUOUS
+
+No TP-first or SL-first assumption is made.
+
+Overall:
+
+- eligible action rows: 721,888
+- markets: 5,891
+- decision states: 88,359
+- unambiguous/resolved rows: 670,813
+- ambiguous rows: 51,075
+- ambiguity rate: approximately 7.0752%
+- unresolved rows: 0
+
+Ambiguity is highest for tighter scalp profiles:
+
+- TP5/SL5: ~19.98%
+- TP10/SL5: ~11.39%
+- TP15/SL5: ~6.71%
+- TP20/SL10: ~2.82%
+- TP25/SL10: ~1.99%
+- SETTLE: 0%
+
+## P&L Limitation
+
+Exactly 119,122 SL-class rows do not have a reliable historical exit
+price because the stop crossing is visible only through intra-candle
+OHLC.
+
+These rows must NOT be treated as having known realized net return.
+
+Therefore future action ML should distinguish:
+
+1. categorical/path outcome modeling;
+2. net-return modeling where execution outcome is defensible.
+
+Training a return model only on known-P&L rows can introduce
+selection bias because missing stop P&L is not random.
+
+Historical return modeling must explicitly address this limitation.
+
+## Historical Resolution Limitations
+
+Historical Kalshi observations remain approximately one minute.
+
+The dataset does not contain historical:
+
+- full order-book depth
+- IOC latency
+- queue position
+- partial-fill paths
+- exact stop slippage
+- independently recorded NO book paths
+
+Prospective high-resolution topbook/depth data remains necessary for
+strong execution-aware scalp modeling.
+
+## Validation
+
+After Phase 3A:
+
+- focused Phase 3A tests: 13 passed
+- full suite: 166 passed
+- compileall: passed
+- start.sh syntax: passed
+- snapshot.sh syntax: passed
+- git diff --check: passed
+
+Phase 3A is scientifically usable for an initial ambiguity-aware
+categorical scalp/action experiment and limited net-outcome modeling.
+
+No edge claim is supported by Phase 3A itself.
+
+## Development Priority Change
+
+Before implementing ML Phase 3B, build Automation V1.
+
+The goal is to automate the same research/development workflow that
+has so far required manual human orchestration.
+
+Automation must NOT have authority to:
+
+- merge or push directly to main
+- enable real-money Kalshi execution
+- access live write-capable Kalshi credentials
+
+Development and research automation should operate in isolated
+branches/worktrees and disposable environments.
