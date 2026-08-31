@@ -86,13 +86,17 @@ def run_review_pipeline(
             name for name in before.keys() | after.keys()
             if before.get(name) != after.get(name)
         }
-        allowed = (
+        allowed_prefixes = (
             f"automation/runs/{result.reviewer_run_id}/",
-            f"automation/tasks/{result.reviewer_run_id}.prompt.md",
         )
+        allowed_exact = {
+            f"automation/tasks/{result.reviewer_run_id}.prompt.md",
+            f"automation/tasks/{task.task_id}.json",
+        }
         unexpected = {
             name for name in changed_by_review
-            if name != allowed[1] and not name.startswith(allowed[0])
+            if name not in allowed_exact
+            and not any(name.startswith(prefix) for prefix in allowed_prefixes)
         }
         if unexpected:
             return PipelineDecision("BLOCKED", ErrorClassification.SECURITY_VIOLATION, tuple(builders), tuple(reviews), tuple(validations), cycle, "reviewer modified the task worktree")

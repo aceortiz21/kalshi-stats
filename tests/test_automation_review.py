@@ -115,3 +115,24 @@ def test_secret_text_is_redacted_from_findings(records):
     payload = json.dumps({"verdict": "CHANGES_REQUIRED", "findings": [{"severity": "HIGH", "code": "S", "summary": openai_shaped, "detail": bearer_shaped}]})
     parsed = parse_reviewer_output(payload, reviewer_run_id="r", reviewer_session_id="reviewer", builder_run_id=builder.run_id, builder_session_id=builder.session_thread_id, repair_cycle=0)
     assert "exampleSecret" not in json.dumps(parsed.to_dict())
+
+def test_coordinator_task_state_change_during_review_is_allowed(records, tmp_path):
+    root, task, builder = records
+
+    def reviewer(task, run, validation, cycle):
+        state = root / "automation" / "tasks" / f"{task.task_id}.json"
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text('{"coordinator":"reviewing"}\n')
+        return review(run, cycle)
+
+    result = run_review_pipeline(
+        task,
+        builder,
+        validate=lambda *_: report(),
+        review=reviewer,
+        repair=lambda *_: None,
+        evidence_directory=tmp_path,
+    )
+
+    assert result.status == "PASSED"
+    assert result.classification is ErrorClassification.SUCCESS
