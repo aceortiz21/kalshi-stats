@@ -394,3 +394,88 @@ Current intended sequence:
 13. Build full-depth order-book reconstruction before serious
     position-size scaling.
 14. Consider RL only after simulator fidelity improves.
+
+---
+
+# PaperBroker Freshness Fix Completed
+
+The previously documented stale/restart PaperBroker issue has now
+been fixed.
+
+Implementation:
+
+src/kalshi_stats/paper_broker.py
+
+A named freshness threshold now exists:
+
+PAPER_SIGNAL_MAX_AGE_MS = 5000
+
+New paper signals are accepted only when:
+
+0 <= now_ms - signal_ts_ms <= 5000
+
+This means:
+
+- future-dated signals are rejected;
+- restart-scale stale backlog cannot create new paper trades;
+- ordinary scheduling jitter remains allowed.
+
+The five-second threshold was selected because:
+
+- upstream live feature producers generally run once per second;
+- some feature timestamps are rounded to the second;
+- PaperBroker polls approximately every 250 ms;
+- the repository already uses approximately five seconds as a
+  live-feature freshness ceiling elsewhere.
+
+GRID_V1 and TAIL_V1:
+
+- stale feature rows are still consumed;
+- paper_scan_cursors advance through those rows;
+- stale rows do not create new paper trades.
+
+MAIN_TRIGGER, MAIN_CONTEXT, MICRO_MULTIPLIER, and
+MICRO_LIVE_DISCOVERY:
+
+- stale discovery rows are excluded from new paper evidence;
+- fresh behavior remains unchanged.
+
+Existing:
+
+- paper trades,
+- paper accounts,
+- scan cursors,
+- strategy definitions,
+- historical evidence
+
+were not reset or rewritten.
+
+Regression coverage was added for:
+
+- stale/fresh GRID behavior;
+- GRID stale cursor advancement;
+- stale/fresh TAIL behavior;
+- TAIL stale cursor advancement;
+- stale/fresh MAIN_TRIGGER;
+- stale/fresh MAIN_CONTEXT;
+- stale/fresh MICRO_MULTIPLIER;
+- stale/fresh MICRO_LIVE_DISCOVERY.
+
+Validation after this patch:
+
+- full test suite: 131 passed
+- PaperBroker tests: 22 passed
+- compileall: passed
+- start.sh syntax: passed
+- snapshot.sh syntax: passed
+- git diff --check: passed
+
+Remaining intentional behavior:
+
+Backlog up to exactly five seconds old is accepted as ordinary
+live scheduling tolerance.
+
+The stale/restart issue is therefore considered RESOLVED for the
+current PaperBroker architecture.
+
+The next development phase may proceed to ML Dataset V1.
