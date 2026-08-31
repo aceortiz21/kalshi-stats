@@ -1,0 +1,8 @@
+state/*
+!state/.gitkeep
+tasks/*
+!tasks/.gitkeep
+runs/*
+!runs/.gitkeep
+history/*
+!history/.gitkeep

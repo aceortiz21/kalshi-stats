@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kalshi-stats.local/automation/run.schema.json",
+  "title": "Automation V1 Run Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "task_id",
+    "status",
+    "session_thread_id",
+    "started_at",
+    "finished_at",
+    "branch",
+    "worktree",
+    "files_changed",
+    "validation_results",
+    "final_response_path",
+    "jsonl_log_path",
+    "error_classification",
+    "next_action"
+  ],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "status": {
+      "enum": [
+        "QUEUED",
+        "RUNNING",
+        "VALIDATING",
+        "REVIEWING",
+        "PASSED",
+        "FAILED",
+        "BLOCKED",
+        "WAITING_FOR_QUOTA",
+        "ARCHIVED"
+      ]
+    },
+    "session_thread_id": {"type": ["string", "null"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": ["string", "null"], "format": "date-time"},
+    "branch": {
+      "type": "string",
+      "anyOf": [
+        {"pattern": "^auto/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"},
+        {"pattern": "^automation/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"}
+      ]
+    },
+    "worktree": {"type": "string", "minLength": 1},
+    "files_changed": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "validation_results": {"type": "object"},
+    "final_response_path": {"type": "string", "minLength": 1},
+    "jsonl_log_path": {"type": "string", "minLength": 1},
+    "error_classification": {
+      "type": ["string", "null"],
+      "enum": [
+        "SUCCESS",
+        "RATE_LIMITED",
+        "CONTEXT_EXHAUSTED",
+        "CODE_FAILURE",
+        "TEST_FAILURE",
+        "INFRASTRUCTURE_FAILURE",
+        "SECURITY_VIOLATION",
+        "DATABASE_INTEGRITY_FAILURE",
+        "UNKNOWN_FAILURE",
+        null
+      ]
+    },
+    "next_action": {"type": "string", "minLength": 1}
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kalshi-stats.local/automation/task.schema.json",
+  "title": "Automation V1 Task Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "task_id",
+    "title",
+    "objective",
+    "status",
+    "prerequisites",
+    "branch",
+    "worktree",
+    "attempt_count",
+    "max_attempts",
+    "created_at",
+    "updated_at",
+    "run_ids",
+    "report_paths",
+    "last_error",
+    "next_action"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "title": {"type": "string", "minLength": 1},
+    "objective": {"type": "string", "minLength": 1},
+    "status": {
+      "enum": [
+        "QUEUED",
+        "RUNNING",
+        "VALIDATING",
+        "REVIEWING",
+        "PASSED",
+        "FAILED",
+        "BLOCKED",
+        "WAITING_FOR_QUOTA",
+        "ARCHIVED"
+      ]
+    },
+    "prerequisites": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "branch": {
+      "type": "string",
+      "anyOf": [
+        {"pattern": "^auto/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"},
+        {"pattern": "^automation/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"}
+      ]
+    },
+    "worktree": {"type": "string", "minLength": 1},
+    "attempt_count": {"type": "integer", "minimum": 0},
+    "max_attempts": {"type": "integer", "minimum": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "run_ids": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "report_paths": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "last_error": {"type": ["string", "null"]},
+    "next_action": {"type": "string", "minLength": 1}
+  }
+}

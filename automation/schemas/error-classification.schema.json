@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kalshi-stats.local/automation/error-classification.schema.json",
+  "title": "Automation V1 Error Classification",
+  "type": "string",
+  "enum": [
+    "SUCCESS",
+    "RATE_LIMITED",
+    "CONTEXT_EXHAUSTED",
+    "CODE_FAILURE",
+    "TEST_FAILURE",
+    "INFRASTRUCTURE_FAILURE",
+    "SECURITY_VIOLATION",
+    "DATABASE_INTEGRITY_FAILURE",
+    "UNKNOWN_FAILURE"
+  ]
+}

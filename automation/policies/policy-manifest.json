@@ -1,0 +1,38 @@
+{
+  "policy_version": 1,
+  "git": {
+    "highest_autonomous_integration_target": "automation-integration",
+    "autonomous_integration_targets": ["automation-integration"],
+    "human_only_branches": ["main"],
+    "task_branch_patterns": [
+      "^auto/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$",
+      "^automation/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"
+    ],
+    "task_records_may_use_integration_targets": false,
+    "run_records_may_use_integration_targets": false,
+    "isolated_worktree_required": true,
+    "autonomous_main_merge_allowed": false,
+    "autonomous_main_push_allowed": false
+  },
+  "research": {
+    "chronology_required": true,
+    "forward_validation_required": true,
+    "settlement_leakage_allowed": false,
+    "negative_evidence_preserved": true,
+    "challengers_frozen": true,
+    "invent_ambiguous_outcomes": false,
+    "rewrite_tested_definitions_from_results": false,
+    "ml_phase_3b_enabled": false
+  },
+  "safety": {
+    "live_money_kalshi_enabled": false,
+    "write_capable_kalshi_credentials_allowed": false,
+    "host_secret_access_allowed": false,
+    "evidence_deletion_or_reset_allowed": false,
+    "reproducible_dependency_changes_required": true,
+    "stop_error_classes": [
+      "SECURITY_VIOLATION",
+      "DATABASE_INTEGRITY_FAILURE"
+    ]
+  }
+}
