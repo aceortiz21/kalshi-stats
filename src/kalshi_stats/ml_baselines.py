@@ -2,12 +2,39 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from types import MappingProxyType
 from typing import Sequence
 
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+
+
+TREE_MODEL_CONFIGURATION = MappingProxyType({
+    "loss": "log_loss",
+    "learning_rate": 0.05,
+    "max_iter": 200,
+    "max_leaf_nodes": 15,
+    "max_depth": None,
+    "min_samples_leaf": 50,
+    "l2_regularization": 1.0,
+    "max_features": 1.0,
+    "max_bins": 255,
+    "categorical_features": None,
+    "early_stopping": False,
+    "random_state": 0,
+})
+
+TREE_MODEL_RATIONALE = (
+    "A modest learning rate and 200 fixed boosting iterations provide moderate "
+    "capacity; 15-leaf trees permit nonlinear interactions while 50-row leaves "
+    "and L2 regularization constrain small, high-confidence leaves. All features "
+    "remain eligible at each split. Native missing-value routing is used, and "
+    "automatic early stopping is disabled so no internal validation split or "
+    "test observation can influence fitting."
+)
 
 
 @dataclass(frozen=True)
@@ -40,6 +67,11 @@ def build_logistic_pipeline() -> Pipeline:
             ),
         ]
     )
+
+
+def build_fixed_hist_gradient_boosting_classifier() -> HistGradientBoostingClassifier:
+    """Build the sole predeclared nonlinear estimator for ML Phase 2."""
+    return HistGradientBoostingClassifier(**TREE_MODEL_CONFIGURATION)
 
 
 def probability_metrics(
