@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
