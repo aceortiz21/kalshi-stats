@@ -399,7 +399,7 @@ else
         --db "$DB" \
         --interval 0.25 \
         --starting-cash 10 \
-        --trade-notional 0.01 \
+        --trade-notional 1.00 \
         > /dev/null 2>&1 &
 
     PAPER_BROKER_SUPERVISOR_PID=$!
