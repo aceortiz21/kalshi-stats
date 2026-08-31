@@ -2326,6 +2326,548 @@ def render_personal_performance(
 
 
 
+
+def render_paper_trading_lab(
+    paper,
+) -> str:
+    if not paper:
+        return ""
+
+    accounts = list(
+        paper.get(
+            "accounts",
+            [],
+        )
+    )
+
+    recent = list(
+        paper.get(
+            "recent",
+            [],
+        )
+    )
+
+    def money(
+        value,
+        *,
+        signed=False,
+    ):
+        if value is None:
+            return "-"
+
+        value = float(
+            value
+        )
+
+        if signed:
+            return (
+                f"{value:+.4f}"
+                if abs(value) < 1
+                else f"{value:+.2f}"
+            )
+
+        return (
+            f"${value:.4f}"
+            if abs(value) < 1
+            else f"${value:.2f}"
+        )
+
+    def price(
+        value,
+    ):
+        if value is None:
+            return "-"
+
+        return (
+            f"{float(value) * 100:.2f}c"
+        )
+
+    account_rows = []
+
+    for row in accounts:
+        closed = int(
+            row[
+                "closed"
+            ]
+        )
+
+        if closed:
+            record = (
+                f"{row['wins']}-"
+                f"{row['losses']}"
+            )
+        else:
+            record = "-"
+
+        win_rate = (
+            "-"
+            if row[
+                "win_rate"
+            ]
+            is None
+            else (
+                f"{float(row['win_rate']) * 100:.1f}%"
+            )
+        )
+
+        account_rows.append(
+            """
+            <tr>
+              <td>
+                <strong>{description}</strong>
+                <div style="
+                    font-size:11px;
+                    opacity:.60;
+                    margin-top:2px;
+                ">
+                  {strategy}
+                </div>
+              </td>
+
+              <td>{family}</td>
+              <td>{equity}</td>
+              <td>{pnl}</td>
+              <td>{signals}</td>
+              <td>{record}</td>
+              <td>{win_rate}</td>
+              <td>{open_count}</td>
+              <td>{no_fill}</td>
+            </tr>
+            """.format(
+                description=html.escape(
+                    str(
+                        row[
+                            "description"
+                        ]
+                    )
+                ),
+
+                strategy=html.escape(
+                    str(
+                        row[
+                            "strategy_key"
+                        ]
+                    )
+                ),
+
+                family=html.escape(
+                    str(
+                        row[
+                            "family"
+                        ]
+                    )
+                ),
+
+                equity=money(
+                    row[
+                        "equity"
+                    ]
+                ),
+
+                pnl=(
+                    "$"
+                    + money(
+                        row[
+                            "equity_pnl"
+                        ],
+                        signed=True,
+                    )
+                ),
+
+                signals=row[
+                    "signals"
+                ],
+
+                record=record,
+
+                win_rate=win_rate,
+
+                open_count=row[
+                    "open"
+                ],
+
+                no_fill=row[
+                    "no_fill"
+                ],
+            )
+        )
+
+    if recent:
+        recent_rows = []
+
+        for row in recent:
+            state = str(
+                row[
+                    "state"
+                ]
+            )
+
+            pnl = (
+                "-"
+                if row[
+                    "net_pnl"
+                ]
+                is None
+                else (
+                    "$"
+                    + money(
+                        row[
+                            "net_pnl"
+                        ],
+                        signed=True,
+                    )
+                )
+            )
+
+            recent_rows.append(
+                """
+                <tr>
+                  <td>{strategy}</td>
+                  <td>{side}</td>
+                  <td>{entry}</td>
+                  <td>{exit}</td>
+                  <td>{state}</td>
+                  <td>{reason}</td>
+                  <td>{pnl}</td>
+                </tr>
+                """.format(
+                    strategy=html.escape(
+                        str(
+                            row[
+                                "strategy_key"
+                            ]
+                        )
+                    ),
+
+                    side=html.escape(
+                        str(
+                            row[
+                                "side"
+                            ]
+                        ).upper()
+                    ),
+
+                    entry=price(
+                        row[
+                            "entry_avg_price"
+                        ]
+                    ),
+
+                    exit=price(
+                        row[
+                            "exit_avg_price"
+                        ]
+                    ),
+
+                    state=html.escape(
+                        state
+                    ),
+
+                    reason=html.escape(
+                        str(
+                            row[
+                                "exit_reason"
+                            ]
+                            or "-"
+                        )
+                    ),
+
+                    pnl=pnl,
+                )
+            )
+
+        recent_html = """
+        <div style="
+            margin-top:16px;
+            overflow-x:auto;
+        ">
+          <div style="
+              font-size:12px;
+              text-transform:uppercase;
+              letter-spacing:.07em;
+              opacity:.70;
+              margin-bottom:7px;
+          ">
+            Latest paper trades
+          </div>
+
+          <table style="
+              min-width:720px;
+              font-size:12px;
+          ">
+            <thead>
+              <tr>
+                <th>Strategy</th>
+                <th>Side</th>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th>State</th>
+                <th>Reason</th>
+                <th>Net P&amp;L</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {rows}
+            </tbody>
+          </table>
+        </div>
+        """.format(
+            rows="\n".join(
+                recent_rows
+            )
+        )
+
+    else:
+        recent_html = """
+        <div style="
+            margin-top:16px;
+            padding:12px;
+            border:
+                1px solid rgba(127,127,127,.22);
+            border-radius:9px;
+            font-size:13px;
+            opacity:.70;
+        ">
+          No prospective paper trades yet.
+          The broker is waiting for the first
+          post-start strategy signal.
+        </div>
+        """
+
+    best = paper.get(
+        "best"
+    )
+
+    best_name = (
+        "-"
+        if best is None
+        else str(
+            best[
+                "description"
+            ]
+        )
+    )
+
+    best_equity = (
+        "-"
+        if best is None
+        else money(
+            best[
+                "equity"
+            ]
+        )
+    )
+
+    return """
+    <section style="
+        margin-top:16px;
+        border:
+            1px solid rgba(127,127,127,.35);
+        border-radius:12px;
+        padding:14px;
+        width:100%;
+        box-sizing:border-box;
+    ">
+
+      <div style="
+          display:flex;
+          justify-content:space-between;
+          gap:16px;
+          flex-wrap:wrap;
+          margin-bottom:12px;
+      ">
+        <div>
+          <div style="
+              font-size:12px;
+              letter-spacing:.07em;
+              text-transform:uppercase;
+              opacity:.72;
+          ">
+            Realistic simulated execution
+          </div>
+
+          <h3 style="margin:3px 0 0 0;">
+            Paper Trading Lab
+          </h3>
+        </div>
+
+        <div style="
+            max-width:560px;
+            font-size:12px;
+            opacity:.72;
+        ">
+          Same live strategy signals and observed
+          Kalshi top-of-book execution, but no real
+          money is sent. Open positions are valued
+          at the latest executable bid.
+        </div>
+      </div>
+
+      <div style="
+          display:grid;
+          grid-template-columns:
+              repeat(auto-fit,minmax(135px,1fr));
+          gap:10px;
+          margin-bottom:14px;
+      ">
+
+        <div>
+          <span>Strategies</span>
+          <strong style="display:block;font-size:20px;">
+            {accounts}
+          </strong>
+        </div>
+
+        <div>
+          <span>Total virtual start</span>
+          <strong style="display:block;font-size:20px;">
+            {start}
+          </strong>
+        </div>
+
+        <div>
+          <span>Total paper equity</span>
+          <strong style="display:block;font-size:20px;">
+            {equity}
+          </strong>
+        </div>
+
+        <div>
+          <span>Paper P&amp;L</span>
+          <strong style="display:block;font-size:20px;">
+            {pnl}
+          </strong>
+        </div>
+
+        <div>
+          <span>Signals</span>
+          <strong style="display:block;font-size:20px;">
+            {signals}
+          </strong>
+        </div>
+
+        <div>
+          <span>Closed</span>
+          <strong style="display:block;font-size:20px;">
+            {closed}
+          </strong>
+        </div>
+
+        <div>
+          <span>Open</span>
+          <strong style="display:block;font-size:20px;">
+            {open_count}
+          </strong>
+        </div>
+
+        <div>
+          <span>No-fill</span>
+          <strong style="display:block;font-size:20px;">
+            {no_fill}
+          </strong>
+        </div>
+
+        <div>
+          <span>Current leader</span>
+          <strong style="
+              display:block;
+              font-size:14px;
+              margin-top:3px;
+          ">
+            {best_name}
+          </strong>
+          <small>{best_equity}</small>
+        </div>
+
+      </div>
+
+      <div style="overflow-x:auto;">
+        <table style="
+            min-width:900px;
+            font-size:12px;
+        ">
+          <thead>
+            <tr>
+              <th>Strategy</th>
+              <th>Family</th>
+              <th>Equity</th>
+              <th>P&amp;L</th>
+              <th>Signals</th>
+              <th>W-L</th>
+              <th>Win %</th>
+              <th>Open</th>
+              <th>No-fill</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {account_rows}
+          </tbody>
+        </table>
+      </div>
+
+      {recent_html}
+
+    </section>
+    """.format(
+        accounts=paper[
+            "account_count"
+        ],
+
+        start=money(
+            paper[
+                "total_starting_cash"
+            ]
+        ),
+
+        equity=money(
+            paper[
+                "total_equity"
+            ]
+        ),
+
+        pnl=(
+            "$"
+            + money(
+                paper[
+                    "total_equity_pnl"
+                ],
+                signed=True,
+            )
+        ),
+
+        signals=paper[
+            "signal_count"
+        ],
+
+        closed=paper[
+            "closed_count"
+        ],
+
+        open_count=paper[
+            "open_count"
+        ],
+
+        no_fill=paper[
+            "no_fill_count"
+        ],
+
+        best_name=html.escape(
+            best_name
+        ),
+
+        best_equity=best_equity,
+
+        account_rows="\n".join(
+            account_rows
+        ),
+
+        recent_html=recent_html,
+    )
+
+
+
 def render_live_market_fragment(
     output_path: str | Path,
     active_views,
@@ -2333,6 +2875,7 @@ def render_live_market_fragment(
     health=None,
     brti=None,
     personal=None,
+    paper=None,
     micro_states=None,
     trigger_states=None,
 ) -> None:
@@ -2499,6 +3042,7 @@ def render_live_market_fragment(
       <!--PERSONAL_LEDGER_START-->
       <div id="personal-ledger-region">
         {render_personal_performance(personal)}
+        {render_paper_trading_lab(paper)}
       </div>
       <!--PERSONAL_LEDGER_END-->
     </div>

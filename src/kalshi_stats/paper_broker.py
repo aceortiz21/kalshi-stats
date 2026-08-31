@@ -2465,3 +2465,642 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def build_paper_dashboard_state(
+    connection,
+    *,
+    recent_limit=20,
+):
+    """
+    Build a read-only view of the realistic paper
+    accounts.
+
+    Equity = cash + executable-bid value of currently
+    open paper positions.
+    """
+
+    account_rows = connection.execute(
+        """
+        SELECT
+            accounts.*,
+
+            registry.family,
+            registry.description
+
+        FROM paper_accounts AS accounts
+
+        JOIN shadow_strategy_registry AS registry
+          ON registry.strategy_key
+             = accounts.strategy_key
+
+        WHERE accounts.enabled = 1
+
+        ORDER BY accounts.strategy_key
+        """
+    ).fetchall()
+
+    trade_rows = connection.execute(
+        """
+        SELECT *
+        FROM paper_trades
+        ORDER BY signal_ts_ms, paper_trade_id
+        """
+    ).fetchall()
+
+    by_strategy = {}
+
+    for account in account_rows:
+        key = str(
+            account[
+                "strategy_key"
+            ]
+        )
+
+        by_strategy[key] = {
+            "strategy_key":
+                key,
+
+            "family":
+                str(
+                    account[
+                        "family"
+                    ]
+                ),
+
+            "description":
+                str(
+                    account[
+                        "description"
+                    ]
+                ),
+
+            "starting_cash":
+                float(
+                    account[
+                        "starting_cash"
+                    ]
+                ),
+
+            "cash":
+                float(
+                    account[
+                        "cash"
+                    ]
+                ),
+
+            "realized_pnl":
+                float(
+                    account[
+                        "realized_pnl"
+                    ]
+                ),
+
+            "trade_notional":
+                float(
+                    account[
+                        "trade_notional"
+                    ]
+                ),
+
+            "created_at_ms":
+                int(
+                    account[
+                        "created_at_ms"
+                    ]
+                ),
+
+            "signals":
+                0,
+
+            "closed":
+                0,
+
+            "wins":
+                0,
+
+            "losses":
+                0,
+
+            "breakeven":
+                0,
+
+            "open":
+                0,
+
+            "no_fill":
+                0,
+
+            "open_value":
+                0.0,
+
+            "net_pnl":
+                0.0,
+        }
+
+    latest_book_cache = {}
+
+    def latest_book(
+        market_ticker,
+    ):
+        ticker = str(
+            market_ticker
+        )
+
+        if ticker in latest_book_cache:
+            return latest_book_cache[
+                ticker
+            ]
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM topbook_snapshots
+
+            WHERE market_ticker = ?
+
+            ORDER BY ts_ms DESC
+            LIMIT 1
+            """,
+            (
+                ticker,
+            ),
+        ).fetchone()
+
+        latest_book_cache[
+            ticker
+        ] = row
+
+        return row
+
+    for trade in trade_rows:
+        strategy_key = str(
+            trade[
+                "strategy_key"
+            ]
+        )
+
+        account = by_strategy.get(
+            strategy_key
+        )
+
+        if account is None:
+            continue
+
+        account[
+            "signals"
+        ] += 1
+
+        state = str(
+            trade[
+                "state"
+            ]
+        )
+
+        if state == "CLOSED":
+            account[
+                "closed"
+            ] += 1
+
+            pnl = float(
+                trade[
+                    "net_pnl"
+                ]
+                or 0.0
+            )
+
+            account[
+                "net_pnl"
+            ] += pnl
+
+            if pnl > EPSILON:
+                account[
+                    "wins"
+                ] += 1
+
+            elif pnl < -EPSILON:
+                account[
+                    "losses"
+                ] += 1
+
+            else:
+                account[
+                    "breakeven"
+                ] += 1
+
+        elif state in {
+            "OPEN",
+            "STOP_EXIT",
+        }:
+            account[
+                "open"
+            ] += 1
+
+            remaining = float(
+                trade[
+                    "remaining_count"
+                ]
+                or 0.0
+            )
+
+            if remaining <= EPSILON:
+                continue
+
+            book_row = latest_book(
+                trade[
+                    "market_ticker"
+                ]
+            )
+
+            if book_row is None:
+                continue
+
+            book = side_book(
+                book_row,
+                trade[
+                    "side"
+                ],
+            )
+
+            account[
+                "open_value"
+            ] += (
+                remaining
+                * float(
+                    book[
+                        "bid"
+                    ]
+                )
+            )
+
+        elif state in {
+            "NO_FILL",
+            "NO_CAPITAL",
+        }:
+            account[
+                "no_fill"
+            ] += 1
+
+    accounts = list(
+        by_strategy.values()
+    )
+
+    for account in accounts:
+        account[
+            "equity"
+        ] = (
+            account[
+                "cash"
+            ]
+            + account[
+                "open_value"
+            ]
+        )
+
+        account[
+            "equity_pnl"
+        ] = (
+            account[
+                "equity"
+            ]
+            - account[
+                "starting_cash"
+            ]
+        )
+
+        closed = int(
+            account[
+                "closed"
+            ]
+        )
+
+        account[
+            "win_rate"
+        ] = (
+            None
+            if closed <= 0
+            else (
+                account[
+                    "wins"
+                ]
+                / closed
+            )
+        )
+
+    accounts.sort(
+        key=lambda row: (
+            -float(
+                row[
+                    "equity"
+                ]
+            ),
+
+            -int(
+                row[
+                    "closed"
+                ]
+            ),
+
+            row[
+                "strategy_key"
+            ],
+        )
+    )
+
+    recent_rows = connection.execute(
+        """
+        SELECT
+            paper_trade_id,
+            strategy_key,
+            family,
+
+            market_ticker,
+            side,
+
+            signal_ts_ms,
+
+            requested_count,
+            filled_count,
+
+            entry_avg_price,
+            entry_notional,
+            entry_fee,
+
+            tp_price,
+            sl_price,
+
+            state,
+
+            exit_reason,
+            exit_avg_price,
+            exit_fee,
+
+            gross_pnl,
+            net_pnl,
+
+            updated_at_ms
+
+        FROM paper_trades
+
+        ORDER BY
+            updated_at_ms DESC,
+            paper_trade_id DESC
+
+        LIMIT ?
+        """,
+        (
+            int(
+                recent_limit
+            ),
+        ),
+    ).fetchall()
+
+    recent = [
+        dict(
+            row
+        )
+        for row
+        in recent_rows
+    ]
+
+    total_starting = sum(
+        row[
+            "starting_cash"
+        ]
+        for row
+        in accounts
+    )
+
+    total_cash = sum(
+        row[
+            "cash"
+        ]
+        for row
+        in accounts
+    )
+
+    total_open_value = sum(
+        row[
+            "open_value"
+        ]
+        for row
+        in accounts
+    )
+
+    total_equity = (
+        total_cash
+        + total_open_value
+    )
+
+    states = {
+        "WAITING_ENTRY": 0,
+        "OPEN": 0,
+        "STOP_EXIT": 0,
+        "CLOSED": 0,
+        "NO_FILL": 0,
+        "NO_CAPITAL": 0,
+    }
+
+    for trade in trade_rows:
+        state = str(
+            trade[
+                "state"
+            ]
+        )
+
+        states[
+            state
+        ] = (
+            states.get(
+                state,
+                0,
+            )
+            + 1
+        )
+
+    return {
+        "accounts":
+            accounts,
+
+        "recent":
+            recent,
+
+        "account_count":
+            len(
+                accounts
+            ),
+
+        "signal_count":
+            len(
+                trade_rows
+            ),
+
+        "closed_count":
+            states.get(
+                "CLOSED",
+                0,
+            ),
+
+        "open_count":
+            (
+                states.get(
+                    "OPEN",
+                    0,
+                )
+                + states.get(
+                    "STOP_EXIT",
+                    0,
+                )
+            ),
+
+        "waiting_count":
+            states.get(
+                "WAITING_ENTRY",
+                0,
+            ),
+
+        "no_fill_count":
+            (
+                states.get(
+                    "NO_FILL",
+                    0,
+                )
+                + states.get(
+                    "NO_CAPITAL",
+                    0,
+                )
+            ),
+
+        "total_starting_cash":
+            total_starting,
+
+        "total_cash":
+            total_cash,
+
+        "total_open_value":
+            total_open_value,
+
+        "total_equity":
+            total_equity,
+
+        "total_equity_pnl":
+            (
+                total_equity
+                - total_starting
+            ),
+
+        "best":
+            (
+                None
+                if not accounts
+                else accounts[0]
+            ),
+    }
+
+
+def paper_dashboard_signature(
+    state,
+):
+    if not state:
+        return None
+
+    best = state.get(
+        "best"
+    )
+
+    latest = (
+        state.get(
+            "recent"
+        )
+        or []
+    )
+
+    latest_row = (
+        None
+        if not latest
+        else latest[0]
+    )
+
+    return (
+        int(
+            state.get(
+                "account_count",
+                0,
+            )
+        ),
+
+        int(
+            state.get(
+                "signal_count",
+                0,
+            )
+        ),
+
+        int(
+            state.get(
+                "closed_count",
+                0,
+            )
+        ),
+
+        int(
+            state.get(
+                "open_count",
+                0,
+            )
+        ),
+
+        int(
+            state.get(
+                "no_fill_count",
+                0,
+            )
+        ),
+
+        round(
+            float(
+                state.get(
+                    "total_equity",
+                    0.0,
+                )
+            ),
+            6,
+        ),
+
+        (
+            None
+            if best is None
+            else (
+                best[
+                    "strategy_key"
+                ],
+
+                round(
+                    float(
+                        best[
+                            "equity"
+                        ]
+                    ),
+                    6,
+                ),
+            )
+        ),
+
+        (
+            None
+            if latest_row is None
+            else (
+                latest_row[
+                    "paper_trade_id"
+                ],
+
+                latest_row[
+                    "state"
+                ],
+
+                latest_row[
+                    "updated_at_ms"
+                ],
+            )
+        ),
+    )

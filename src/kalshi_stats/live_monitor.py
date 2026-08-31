@@ -33,6 +33,11 @@ from .trigger_shadow import (
     build_live_trigger_state,
     trigger_state_signature,
 )
+
+from .paper_broker import (
+    build_paper_dashboard_state,
+    paper_dashboard_signature,
+)
 from .reporting import render_live_market_fragment
 from .sync import (
     discover_pending_finalizations,
@@ -431,6 +436,9 @@ async def run_websocket_live_loop(
     personal_state = None
     last_personal_check = 0.0
 
+    paper_state = None
+    last_paper_check = 0.0
+
     micro_states = {}
     trigger_states = {}
 
@@ -469,6 +477,41 @@ async def run_websocket_live_loop(
                 f"{type(exc).__name__}: "
                 f"{exc}"
             )
+
+
+    def refresh_paper(
+        *,
+        force: bool = False,
+    ) -> None:
+        nonlocal paper_state
+        nonlocal last_paper_check
+
+        now = time.monotonic()
+
+        if (
+            not force
+            and now
+            - last_paper_check
+            < 2.0
+        ):
+            return
+
+        last_paper_check = now
+
+        try:
+            paper_state = (
+                build_paper_dashboard_state(
+                    connection
+                )
+            )
+
+        except Exception as exc:
+            print(
+                "PAPER DASHBOARD WARNING | "
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+
 
 
     async def service_model_rebuild() -> None:
@@ -878,6 +921,7 @@ async def run_websocket_live_loop(
             await service_model_rebuild()
             refresh_health()
             refresh_personal()
+            refresh_paper()
 
             try:
                 markets = client.get_active_markets(
@@ -916,6 +960,7 @@ async def run_websocket_live_loop(
                     health=health_state,
                     brti=brti_state,
                     personal=personal_state,
+                    paper=paper_state,
                     micro_states=micro_states,
                     trigger_states=trigger_states,
                 )
@@ -1017,6 +1062,7 @@ async def run_websocket_live_loop(
                 health=health_state,
                 brti=brti_state,
                 personal=personal_state,
+                paper=paper_state,
                 micro_states=micro_states,
                 trigger_states=trigger_states,
             )
@@ -1070,6 +1116,7 @@ async def run_websocket_live_loop(
 
                         refresh_health()
                         refresh_personal()
+                        refresh_paper()
 
                         ticker_update = None
 
@@ -1233,6 +1280,10 @@ async def run_websocket_live_loop(
                                 personal_state
                             ),
 
+                            paper_dashboard_signature(
+                                paper_state
+                            ),
+
                             live_micro_states_signature(
                                 micro_states
                             ),
@@ -1264,6 +1315,7 @@ async def run_websocket_live_loop(
                                 health=health_state,
                                 brti=brti_state,
                                 personal=personal_state,
+                                paper=paper_state,
                                 micro_states=micro_states,
                                 trigger_states=trigger_states,
                             )

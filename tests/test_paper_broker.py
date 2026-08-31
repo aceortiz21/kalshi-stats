@@ -663,3 +663,86 @@ def test_paper_broker_does_not_discover_future_signal():
 
     finally:
         connection.close()
+
+
+def test_empty_paper_dashboard_state():
+    from kalshi_stats.paper_broker import (
+        build_paper_dashboard_state,
+    )
+
+    connection = connect(
+        ":memory:"
+    )
+
+    try:
+        init_db(
+            connection
+        )
+
+        state = build_paper_dashboard_state(
+            connection
+        )
+
+        assert state[
+            "account_count"
+        ] == 0
+
+        assert state[
+            "signal_count"
+        ] == 0
+
+        assert state[
+            "total_equity"
+        ] == 0
+
+        assert state[
+            "best"
+        ] is None
+
+    finally:
+        connection.close()
+
+
+def test_paper_dashboard_signature_changes_with_equity():
+    from kalshi_stats.paper_broker import (
+        paper_dashboard_signature,
+    )
+
+    state = {
+        "account_count": 1,
+        "signal_count": 0,
+        "closed_count": 0,
+        "open_count": 0,
+        "no_fill_count": 0,
+        "total_equity": 10.0,
+
+        "best": {
+            "strategy_key":
+                "test",
+
+            "equity":
+                10.0,
+        },
+
+        "recent": [],
+    }
+
+    first = paper_dashboard_signature(
+        state
+    )
+
+    state[
+        "total_equity"
+    ] = 10.5
+
+    state[
+        "best"
+    ][
+        "equity"
+    ] = 10.5
+
+    second = paper_dashboard_signature(
+        state
+    )
+
+    assert first != second
