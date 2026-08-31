@@ -39,7 +39,30 @@ DEFAULT_TRADE_NOTIONAL = 1.00
 
 ENTRY_WAIT_MS = 2000
 
+# Paper evidence is prospective only. Upstream live
+# producers run once per second, while PaperBroker polls
+# every 250 ms, so five seconds allows ordinary scheduling
+# jitter without admitting restart-scale backlog.
+PAPER_SIGNAL_MAX_AGE_MS = 5000
+
 EPSILON = 1e-9
+
+
+def paper_signal_is_fresh(
+    signal_ts_ms,
+    *,
+    now_ms,
+):
+    age_ms = (
+        int(now_ms)
+        - int(signal_ts_ms)
+    )
+
+    return (
+        0
+        <= age_ms
+        <= PAPER_SIGNAL_MAX_AGE_MS
+    )
 
 
 def floor_contract_count(
@@ -424,6 +447,12 @@ def insert_signal(
     sl_price,
     now_ms,
 ):
+    if not paper_signal_is_fresh(
+        signal_ts_ms,
+        now_ms=now_ms,
+    ):
+        return 0
+
     cursor = connection.execute(
         """
         INSERT OR IGNORE INTO
@@ -538,6 +567,8 @@ def discover_main_signals(
                 "created_at_ms"
             ]
         ),
+        int(now_ms)
+        - PAPER_SIGNAL_MAX_AGE_MS,
     )
 
     rows = connection.execute(
@@ -732,6 +763,8 @@ def discover_micro_signals(
                 "created_at_ms"
             ]
         ),
+        int(now_ms)
+        - PAPER_SIGNAL_MAX_AGE_MS,
     )
 
     rows = connection.execute(

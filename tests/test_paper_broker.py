@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from kalshi_stats.database import (
     connect,
     init_db,
@@ -10,11 +12,246 @@ from kalshi_stats.kalshi_ws import (
 )
 
 from kalshi_stats.paper_broker import (
+    PAPER_SIGNAL_MAX_AGE_MS,
     floor_contract_count,
     run_once,
     side_book,
     taker_fee_estimate,
 )
+
+from kalshi_stats.strategy_zoo import (
+    grid_strategy_key,
+)
+
+from kalshi_stats.tail_zoo import (
+    tail_strategy_key,
+)
+
+
+TEST_NOW_MS = 20_000
+
+
+def register_paper_strategy(
+    connection,
+    *,
+    strategy_key,
+    family,
+    definition,
+):
+    connection.execute(
+        """
+        INSERT INTO shadow_strategy_registry (
+            strategy_key,
+            family,
+            version,
+            description,
+            definition_json,
+            evidence_basis,
+            created_at_ms,
+            discovery_cutoff_ms,
+            shadow_start_ms,
+            enabled
+        )
+        VALUES (?, ?, 1, 'test', ?, 'PAPER', 0, 0, 0, 1)
+        """,
+        (
+            strategy_key,
+            family,
+            json.dumps(definition),
+        ),
+    )
+
+    result = run_once(
+        connection,
+        now_ms=1000,
+        starting_cash=10,
+        trade_notional=.01,
+    )
+
+    assert result["accounts_created"] == 1
+
+
+def insert_market_feature(
+    connection,
+    *,
+    ticker,
+    ts_ms,
+    yes_ask,
+    no_ask,
+    seconds_remaining=300,
+):
+    connection.execute(
+        """
+        INSERT INTO market_feature_snapshots (
+            market_ticker,
+            ts,
+            btc_ts,
+            btc_age_ms,
+            threshold,
+            threshold_rule,
+            spot,
+            threshold_distance_dollars,
+            threshold_distance_pct,
+            threshold_distance_bps,
+            seconds_remaining,
+            yes_bid,
+            yes_ask,
+            no_bid,
+            no_ask
+        )
+        VALUES (
+            ?, ?, ?, 0, 100000, 'greater', 100000,
+            0, 0, 0, ?, ?, ?, ?, ?
+        )
+        """,
+        (
+            ticker,
+            ts_ms,
+            ts_ms,
+            seconds_remaining,
+            max(0.0, yes_ask - .01),
+            yes_ask,
+            max(0.0, no_ask - .01),
+            no_ask,
+        ),
+    )
+
+
+def insert_main_confirmation(
+    connection,
+    *,
+    ticker,
+    profile_id,
+    confirmed_at_ms,
+):
+    connection.execute(
+        """
+        INSERT INTO prospective_opportunities (
+            strategy_id,
+            market_ticker,
+            side,
+            detected_at_ms,
+            market_feature_ts,
+            entry_bid,
+            entry_ask,
+            seconds_remaining,
+            threshold,
+            spot,
+            episode_number,
+            episode_start_ms
+        )
+        VALUES (
+            'test', ?, 'yes', ?, ?, .60, .61, 500,
+            100000, 100000, 1, ?
+        )
+        """,
+        (
+            ticker,
+            confirmed_at_ms,
+            confirmed_at_ms,
+            confirmed_at_ms,
+        ),
+    )
+
+    opportunity_id = connection.execute(
+        """
+        SELECT opportunity_id
+        FROM prospective_opportunities
+        WHERE market_ticker = ?
+        """,
+        (ticker,),
+    ).fetchone()[0]
+
+    connection.execute(
+        """
+        INSERT INTO main_trigger_confirmations (
+            opportunity_id,
+            strategy_id,
+            market_ticker,
+            side,
+            episode_number,
+            profile_id,
+            raw_start_ms,
+            window_seconds,
+            minimum_occupancy,
+            requires_continuous,
+            status,
+            confirmed_at_ms,
+            confirm_feature_ts,
+            entry_bid,
+            entry_ask,
+            seconds_remaining,
+            qualified_samples,
+            total_samples,
+            tp_price,
+            sl_price,
+            label_status
+        )
+        VALUES (
+            ?, 'test', ?, 'yes', 1, ?, ?, 0, 1, 1,
+            'CONFIRMED', ?, ?, .60, .61, 500, 1, 1,
+            .86, .56, 'PENDING'
+        )
+        """,
+        (
+            opportunity_id,
+            ticker,
+            profile_id,
+            confirmed_at_ms,
+            confirmed_at_ms,
+            confirmed_at_ms,
+        ),
+    )
+
+
+def insert_micro_opportunity(
+    connection,
+    *,
+    ticker,
+    detected_at_ms,
+):
+    connection.execute(
+        """
+        INSERT INTO micro_multiplier_opportunities (
+            market_ticker,
+            side,
+            detected_at_ms,
+            market_feature_ts,
+            entry_price_key,
+            entry_bid,
+            entry_ask,
+            seconds_remaining,
+            time_bucket
+        )
+        VALUES (?, 'yes', ?, ?, 2, .001, .002, 300, '4-5m')
+        """,
+        (
+            ticker,
+            detected_at_ms,
+            detected_at_ms,
+        ),
+    )
+
+    opportunity_id = connection.execute(
+        """
+        SELECT micro_opportunity_id
+        FROM micro_multiplier_opportunities
+        WHERE market_ticker = ?
+        """,
+        (ticker,),
+    ).fetchone()[0]
+
+    connection.execute(
+        """
+        INSERT INTO micro_multiplier_targets (
+            micro_opportunity_id,
+            target_price,
+            multiplier
+        )
+        VALUES (?, .004, 2)
+        """,
+        (opportunity_id,),
+    )
 
 
 def test_fractional_paper_count():
@@ -661,6 +898,426 @@ def test_paper_broker_does_not_discover_future_signal():
             """
         ).fetchone()[0] == 0
 
+    finally:
+        connection.close()
+
+
+def test_stale_grid_snapshot_advances_cursor_without_trade():
+    connection = connect(":memory:")
+
+    try:
+        init_db(connection)
+
+        strategy_key = grid_strategy_key(
+            "55-64",
+            "4-6m",
+            "settle",
+        )
+
+        register_paper_strategy(
+            connection,
+            strategy_key=strategy_key,
+            family="GRID_V1",
+            definition={},
+        )
+
+        stale_ts = (
+            TEST_NOW_MS
+            - PAPER_SIGNAL_MAX_AGE_MS
+            - 1
+        )
+
+        insert_market_feature(
+            connection,
+            ticker="STALE_GRID",
+            ts_ms=stale_ts,
+            yes_ask=.60,
+            no_ask=.40,
+        )
+
+        result = run_once(
+            connection,
+            now_ms=TEST_NOW_MS,
+            starting_cash=10,
+            trade_notional=.01,
+        )
+
+        assert result["signals_created"] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM paper_trades"
+        ).fetchone()[0] == 0
+
+        cursor = connection.execute(
+            """
+            SELECT last_ts_ms
+            FROM paper_scan_cursors
+            WHERE family = 'GRID_V1'
+            """
+        ).fetchone()
+
+        assert cursor["last_ts_ms"] == stale_ts
+    finally:
+        connection.close()
+
+
+def test_fresh_grid_snapshot_creates_trade():
+    connection = connect(":memory:")
+
+    try:
+        init_db(connection)
+
+        strategy_key = grid_strategy_key(
+            "55-64",
+            "4-6m",
+            "settle",
+        )
+
+        register_paper_strategy(
+            connection,
+            strategy_key=strategy_key,
+            family="GRID_V1",
+            definition={},
+        )
+
+        fresh_ts = TEST_NOW_MS - 1000
+
+        insert_market_feature(
+            connection,
+            ticker="FRESH_GRID",
+            ts_ms=fresh_ts,
+            yes_ask=.60,
+            no_ask=.40,
+        )
+
+        result = run_once(
+            connection,
+            now_ms=TEST_NOW_MS,
+            starting_cash=10,
+            trade_notional=.01,
+        )
+
+        assert result["signals_created"] == 1
+
+        trade = connection.execute(
+            "SELECT * FROM paper_trades"
+        ).fetchone()
+
+        assert trade["strategy_key"] == strategy_key
+        assert trade["signal_ts_ms"] == fresh_ts
+    finally:
+        connection.close()
+
+
+def test_stale_tail_snapshot_advances_cursor_without_trade():
+    connection = connect(":memory:")
+
+    try:
+        init_db(connection)
+
+        strategy_key = tail_strategy_key(
+            "LOW",
+            "0.1-0.4",
+            "4-6m",
+            "settle",
+        )
+
+        register_paper_strategy(
+            connection,
+            strategy_key=strategy_key,
+            family="TAIL_V1",
+            definition={},
+        )
+
+        stale_ts = (
+            TEST_NOW_MS
+            - PAPER_SIGNAL_MAX_AGE_MS
+            - 1
+        )
+
+        insert_market_feature(
+            connection,
+            ticker="STALE_TAIL",
+            ts_ms=stale_ts,
+            yes_ask=.002,
+            no_ask=.998,
+        )
+
+        result = run_once(
+            connection,
+            now_ms=TEST_NOW_MS,
+            starting_cash=10,
+            trade_notional=.01,
+        )
+
+        assert result["signals_created"] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM paper_trades"
+        ).fetchone()[0] == 0
+
+        cursor = connection.execute(
+            """
+            SELECT last_ts_ms
+            FROM paper_scan_cursors
+            WHERE family = 'TAIL_V1'
+            """
+        ).fetchone()
+
+        assert cursor["last_ts_ms"] == stale_ts
+    finally:
+        connection.close()
+
+
+def test_fresh_tail_snapshot_creates_trade():
+    connection = connect(":memory:")
+
+    try:
+        init_db(connection)
+
+        strategy_key = tail_strategy_key(
+            "LOW",
+            "0.1-0.4",
+            "4-6m",
+            "settle",
+        )
+
+        register_paper_strategy(
+            connection,
+            strategy_key=strategy_key,
+            family="TAIL_V1",
+            definition={},
+        )
+
+        fresh_ts = TEST_NOW_MS - 1000
+
+        insert_market_feature(
+            connection,
+            ticker="FRESH_TAIL",
+            ts_ms=fresh_ts,
+            yes_ask=.002,
+            no_ask=.998,
+        )
+
+        result = run_once(
+            connection,
+            now_ms=TEST_NOW_MS,
+            starting_cash=10,
+            trade_notional=.01,
+        )
+
+        assert result["signals_created"] == 1
+
+        trade = connection.execute(
+            "SELECT * FROM paper_trades"
+        ).fetchone()
+
+        assert trade["strategy_key"] == strategy_key
+        assert trade["signal_ts_ms"] == fresh_ts
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    "family",
+    [
+        "MAIN_TRIGGER",
+        "MAIN_CONTEXT",
+    ],
+)
+def test_stale_main_inputs_do_not_create_retroactive_trades(
+    family,
+):
+    connection = connect(":memory:")
+
+    try:
+        init_db(connection)
+
+        profile_id = f"{family}_PROFILE"
+
+        register_paper_strategy(
+            connection,
+            strategy_key=f"{family}:test",
+            family=family,
+            definition={"profile_id": profile_id},
+        )
+
+        stale_ts = (
+            TEST_NOW_MS
+            - PAPER_SIGNAL_MAX_AGE_MS
+            - 1
+        )
+
+        insert_main_confirmation(
+            connection,
+            ticker=f"STALE_{family}",
+            profile_id=profile_id,
+            confirmed_at_ms=stale_ts,
+        )
+
+        result = run_once(
+            connection,
+            now_ms=TEST_NOW_MS,
+            starting_cash=10,
+            trade_notional=.01,
+        )
+
+        assert result["signals_created"] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM paper_trades"
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    "family",
+    [
+        "MAIN_TRIGGER",
+        "MAIN_CONTEXT",
+    ],
+)
+def test_fresh_main_inputs_create_trades(family):
+    connection = connect(":memory:")
+
+    try:
+        init_db(connection)
+
+        profile_id = f"{family}_PROFILE"
+
+        register_paper_strategy(
+            connection,
+            strategy_key=f"{family}:test",
+            family=family,
+            definition={"profile_id": profile_id},
+        )
+
+        fresh_ts = TEST_NOW_MS - 1000
+
+        insert_main_confirmation(
+            connection,
+            ticker=f"FRESH_{family}",
+            profile_id=profile_id,
+            confirmed_at_ms=fresh_ts,
+        )
+
+        result = run_once(
+            connection,
+            now_ms=TEST_NOW_MS,
+            starting_cash=10,
+            trade_notional=.01,
+        )
+
+        assert result["signals_created"] == 1
+
+        trade = connection.execute(
+            "SELECT * FROM paper_trades"
+        ).fetchone()
+
+        assert trade["family"] == family
+        assert trade["signal_ts_ms"] == fresh_ts
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    "family",
+    [
+        "MICRO_MULTIPLIER",
+        "MICRO_LIVE_DISCOVERY",
+    ],
+)
+def test_stale_micro_inputs_do_not_create_retroactive_trades(
+    family,
+):
+    connection = connect(":memory:")
+
+    try:
+        init_db(connection)
+
+        register_paper_strategy(
+            connection,
+            strategy_key=f"{family}:test",
+            family=family,
+            definition={
+                "entry_price_key": 2,
+                "time_bucket": "4-5m",
+                "target_price_key": 4,
+            },
+        )
+
+        stale_ts = (
+            TEST_NOW_MS
+            - PAPER_SIGNAL_MAX_AGE_MS
+            - 1
+        )
+
+        insert_micro_opportunity(
+            connection,
+            ticker=f"STALE_{family}",
+            detected_at_ms=stale_ts,
+        )
+
+        result = run_once(
+            connection,
+            now_ms=TEST_NOW_MS,
+            starting_cash=10,
+            trade_notional=.01,
+        )
+
+        assert result["signals_created"] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM paper_trades"
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    "family",
+    [
+        "MICRO_MULTIPLIER",
+        "MICRO_LIVE_DISCOVERY",
+    ],
+)
+def test_fresh_micro_inputs_create_trades(family):
+    connection = connect(":memory:")
+
+    try:
+        init_db(connection)
+
+        register_paper_strategy(
+            connection,
+            strategy_key=f"{family}:test",
+            family=family,
+            definition={
+                "entry_price_key": 2,
+                "time_bucket": "4-5m",
+                "target_price_key": 4,
+            },
+        )
+
+        fresh_ts = TEST_NOW_MS - 1000
+
+        insert_micro_opportunity(
+            connection,
+            ticker=f"FRESH_{family}",
+            detected_at_ms=fresh_ts,
+        )
+
+        result = run_once(
+            connection,
+            now_ms=TEST_NOW_MS,
+            starting_cash=10,
+            trade_notional=.01,
+        )
+
+        assert result["signals_created"] == 1
+
+        trade = connection.execute(
+            "SELECT * FROM paper_trades"
+        ).fetchone()
+
+        assert trade["family"] == family
+        assert trade["signal_ts_ms"] == fresh_ts
     finally:
         connection.close()
 
