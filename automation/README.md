@@ -6,9 +6,10 @@ must reconstruct its work from repository documents, task JSON, run files, and
 Git state.
 
 Phase A defines the durable state model. Phase B adds an isolated development
-container and a bounded noninteractive Codex runner. Neither phase chooses tasks,
-executes retries, creates worktrees, restarts services, merges branches, deploys
-research, or submits Kalshi orders.
+container and a bounded noninteractive Codex runner. Phase C1 adds automated task
+branch/worktree ownership and one frozen authenticated zero-approval canary path.
+These phases do not choose research tasks, execute retries, restart services,
+merge branches, deploy research, or submit Kalshi orders.
 
 ## Directory contract
 
@@ -144,3 +145,47 @@ not yet implement automatic context rollover or `codex exec resume` scheduling.
 
 See `automation/container/README.md` for the exact image, mounts, Codex 0.151.0
 syntax, threat boundary, authentication bootstrap, and smoke test.
+
+## Phase C1 worktree lifecycle and canary
+
+`src/kalshi_stats/automation_worktrees.py` owns bounded creation, inspection, and
+cleanup of task worktrees. A caller must explicitly allow the source branch and
+configure a narrow automation-worktree root. Task branches still must match the
+Phase A policy and can never be `main` or `automation-integration`. Creation and
+inspection reconcile the path, checked-out branch, registered Git worktree pair,
+and common Git directory. Paths outside the configured root, indirect child paths,
+symlink paths, unrelated repositories, existing branches, and conflicting
+worktrees fail closed.
+
+Ordinary cleanup refuses any tracked or untracked change. The deliberate canary
+cleanup mode additionally accepts only caller-enumerated ignored paths, refuses
+unknown ignored content, refuses task branches containing commits, and uses
+non-forced `git worktree remove` plus `git branch -d`. Canary evidence is copied
+to the initiating worktree's ignored `automation/runs/<run-id>/` directory before
+the disposable task worktree and branch are removed.
+
+`src/kalshi_stats/automation_canary.py` implements the concrete bounded flow:
+
+```text
+frozen canary definition
+  -> TaskRecord
+  -> task branch
+  -> isolated worktree
+  -> RunRecord
+  -> six-file run directory + HANDOFF
+  -> Phase B runner
+  -> exact-output/zero-approval validation
+  -> evidence preservation
+  -> guarded disposable cleanup
+```
+
+The source-controlled prompt is `automation/canary/PROMPT.md`. It may write only
+the named `canary-output.txt` inside its ignored run directory and explicitly
+forbids credentials, `main`, the primary `~/stats` runtime, unrelated changes,
+and network access other than the Codex client's own service call. The validator
+requires exact output, populated JSONL/final evidence, recorded zero exit,
+`SUCCESS`, `--ask-for-approval never`, and zero approval-request events.
+
+This is a single infrastructure canary path, not a dispatcher, general mechanical
+validation pipeline, retry/resume supervisor, reviewer pipeline, runtime
+supervisor, integration merger, research planner, or ML Phase 3B resumption.

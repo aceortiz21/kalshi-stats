@@ -18,6 +18,7 @@ from kalshi_stats.automation_runner import (
     create_run_directory,
     execute_launch,
     prepare_launch,
+    redact_diagnostic_text,
     select_container_environment,
     verify_task_worktree,
 )
@@ -237,6 +238,7 @@ def test_docker_command_has_only_allowed_mounts_and_hardening(isolated_git):
     joined = " ".join(command)
     assert "docker.sock" not in joined
     assert "--privileged" not in command
+    assert "--interactive" in command
     assert "--network bridge" in joined
     assert "--cap-drop ALL" in joined
     assert "no-new-privileges" in joined
@@ -294,6 +296,7 @@ def test_git_bundle_is_atomically_replaceable(isolated_git):
         (1, "SyntaxError", False, ErrorClassification.CODE_FAILURE),
         (1, "pytest: 2 tests failed", False, ErrorClassification.TEST_FAILURE),
         (1, "cannot connect to Docker daemon", False, ErrorClassification.INFRASTRUCTURE_FAILURE),
+        (1, "No prompt provided via stdin.", False, ErrorClassification.INFRASTRUCTURE_FAILURE),
         (1, "SECURITY_VIOLATION", False, ErrorClassification.SECURITY_VIOLATION),
         (1, "database disk image is malformed", False, ErrorClassification.DATABASE_INTEGRITY_FAILURE),
         (1, "unrecognized failure", False, ErrorClassification.UNKNOWN_FAILURE),
@@ -315,6 +318,24 @@ def test_secret_value_never_appears_in_generated_diagnostic(isolated_git):
     rendered = json.dumps(plan.diagnostic(), sort_keys=True)
     assert secret_value not in rendered
     assert "HTTPS_PROXY" in rendered
+
+
+def test_auth_path_never_appears_in_ordinary_diagnostic(isolated_git):
+    plan = prepare_launch(isolated_git["task"], isolated_git["run"], _config(isolated_git))
+    rendered = json.dumps(plan.diagnostic(), sort_keys=True)
+    assert str(isolated_git["auth"].resolve()) not in rendered
+    assert "<dedicated-automation-auth>" in rendered
+
+
+def test_credential_shaped_log_values_are_redacted():
+    secret = "credential-value-that-must-not-be-logged"
+    rendered = redact_diagnostic_text(
+        f"auth_token={secret} Bearer abc.def.ghi sk-exampleSecret123",
+    )
+    assert secret not in rendered
+    assert "abc.def.ghi" not in rendered
+    assert "sk-exampleSecret123" not in rendered
+    assert rendered.count("[REDACTED]") == 3
 
 
 def test_auth_mount_must_be_dedicated_and_outside_worktree(isolated_git):

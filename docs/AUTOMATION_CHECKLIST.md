@@ -4,7 +4,7 @@ This checklist is the durable roadmap for unattended research and development.
 Checked items have a completed Phase A control-plane foundation in the repository;
 unchecked items are not implemented and must not be inferred from documentation.
 
-1. [ ] Git/runtime isolation
+1. [x] Git/runtime isolation
 2. [x] hard security boundaries
 3. [x] autonomous development container
 4. [x] noninteractive Codex adapter
@@ -43,8 +43,22 @@ not select tasks, create worktrees, retry/resume, run a reviewer pipeline,
 supervise the paper runtime, deploy research, merge branches, resume ML Phase 3B,
 or enable real-money trading.
 
-Git/runtime isolation remains unchecked because launch-time worktree enforcement
-and isolated container Git metadata are implemented, but automated worktree
-creation/lifecycle cleanup is not. Mechanical validation gates remain unchecked:
-the runner records execution metadata and provides `validation.json`, but a
-separate validation pipeline has not been implemented.
+Phase C1 implements and tests automated task branch/worktree creation,
+Git-backed ownership inspection, dirty/unknown-work cleanup refusal, and a narrow
+disposable-canary cleanup path. The frozen canary uses the real TaskRecord ->
+worktree -> RunRecord -> HANDOFF -> Phase B runner path. Item 1 is checked on that
+basis. Main remains human-only, `automation-integration` is not a task branch,
+the primary runtime is excluded, and no merge is automatic.
+
+Phase C1 also adds authenticated canary-specific success validation, including
+the exact output and zero-approval criterion. Mechanical validation gates remain
+unchecked because there is still no general task validation pipeline. Item 6
+remains incomplete: durable recovery inputs and session-ID capture exist, but
+automatic context rollover/resume belongs to Phase C2.
+
+The separately authorized second canary (`phase-c1-auth-canary-002`) completed
+the full authenticated path after the Docker stdin fix: Codex started a session,
+received the frozen prompt, produced the exact output and final response, exited
+zero, exposed a thread ID, and requested zero approvals. Its task and run reached
+`PASSED`; evidence was preserved before guarded disposable cleanup. This closes
+the Phase C1 authenticated-canary proof. Items 6 through 16 remain unchanged.

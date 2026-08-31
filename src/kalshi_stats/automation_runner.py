@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import threading
 from typing import Any, Mapping, Sequence
 
 from .automation_state import (
@@ -82,7 +83,8 @@ _CODE_FAILURE = re.compile(
 )
 _INFRASTRUCTURE_FAILURE = re.compile(
     r"docker daemon|cannot connect to docker|no such image|network is unreachable|"
-    r"temporary failure in name resolution|timed out|timeout expired|executable not found",
+    r"temporary failure in name resolution|timed out|timeout expired|executable not found|"
+    r"no prompt provided via stdin",
     re.I,
 )
 _SECURITY_VIOLATION = re.compile(r"security_violation|security boundary|permission denied by policy", re.I)
@@ -90,6 +92,17 @@ _DATABASE_FAILURE = re.compile(
     r"database_integrity_failure|database disk image is malformed|integrity_check.*(?:fail|not ok)",
     re.I,
 )
+_BEARER_SECRET = re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+")
+_OPENAI_SECRET = re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b")
+_CREDENTIAL_ASSIGNMENT = re.compile(
+    r"(?i)(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|"
+    r"password|passwd|private[_-]?key|credential)\b\s*[:=]\s*[\"']?)[^\s,\"'}]+"
+)
+_PRIVATE_KEY_BLOCK = re.compile(
+    r"-----BEGIN [^-\r\n]*PRIVATE KEY-----.*?-----END [^-\r\n]*PRIVATE KEY-----",
+    re.DOTALL,
+)
+REDACTION = "[REDACTED]"
 
 
 class RunnerFailure(RuntimeError):
@@ -162,6 +175,12 @@ class LaunchPlan:
     def diagnostic(self) -> dict[str, Any]:
         """Return launch metadata that intentionally excludes environment values."""
 
+        auth_path = str(self.config.auth_directory.resolve())
+        docker_command = [
+            argument.replace(auth_path, "<dedicated-automation-auth>")
+            for argument in self.docker_command
+        ]
+
         return {
             "dry_run": self.config.dry_run,
             "task_id": self.task.task_id,
@@ -170,17 +189,31 @@ class LaunchPlan:
             "worktree": str(self.worktree.path),
             "image": self.config.image,
             "timeout_seconds": self.config.timeout_seconds,
-            "docker_command": list(self.docker_command),
+            "docker_command": docker_command,
             "codex_command": list(self.codex_command),
             "forwarded_environment_names": sorted(self.forwarded_environment),
             "mounts": [
                 {"source": str(self.worktree.path), "target": str(CONTAINER_WORKTREE)},
                 {
-                    "source": str(self.config.auth_directory.resolve()),
+                    "source": "<dedicated-automation-auth>",
                     "target": str(CONTAINER_CODEX_HOME),
+                    "writable": True,
                 },
             ],
         }
+
+
+def redact_diagnostic_text(text: str, *, sensitive_values: Sequence[str] = ()) -> str:
+    """Redact configured paths and credential-shaped values before persistence."""
+
+    redacted = text
+    for value in sorted((value for value in sensitive_values if value), key=len, reverse=True):
+        redacted = redacted.replace(value, REDACTION)
+    redacted = _PRIVATE_KEY_BLOCK.sub(REDACTION, redacted)
+    redacted = _BEARER_SECRET.sub(r"\1" + REDACTION, redacted)
+    redacted = _OPENAI_SECRET.sub(REDACTION, redacted)
+    redacted = _CREDENTIAL_ASSIGNMENT.sub(r"\1" + REDACTION, redacted)
+    return redacted
 
 
 def _run_git(worktree: Path, *arguments: str) -> str:
@@ -546,6 +579,7 @@ def prepare_launch(
         "run",
         "--rm",
         "--init",
+        "--interactive",
         "--name",
         container_name,
         "--network",
@@ -643,6 +677,31 @@ def _append_event(path: Path, payload: Mapping[str, Any]) -> None:
         os.fsync(stream.fileno())
 
 
+def _stream_redacted(
+    source: Any,
+    destination: Any,
+    *,
+    sensitive_values: Sequence[str],
+) -> None:
+    try:
+        for line in source:
+            destination.write(
+                redact_diagnostic_text(line, sensitive_values=sensitive_values)
+            )
+            destination.flush()
+    finally:
+        source.close()
+
+
+def _redact_file(path: Path, *, sensitive_values: Sequence[str]) -> None:
+    if not path.is_file():
+        return
+    original = path.read_text(encoding="utf-8", errors="replace")
+    redacted = redact_diagnostic_text(original, sensitive_values=sensitive_values)
+    if redacted != original:
+        _write_text_atomic(path, redacted)
+
+
 def _extract_thread_id(events_path: Path) -> str | None:
     for line in events_path.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
@@ -713,6 +772,7 @@ def execute_launch(plan: LaunchPlan) -> dict[str, Any]:
         },
     )
     timed_out = False
+    sensitive_values = (str(plan.config.auth_directory.resolve()),)
     with events_path.open("a", encoding="utf-8") as stdout, errors_path.open(
         "a", encoding="utf-8"
     ) as stderr:
@@ -720,9 +780,10 @@ def execute_launch(plan: LaunchPlan) -> dict[str, Any]:
             process = subprocess.Popen(
                 plan.docker_command,
                 stdin=subprocess.PIPE,
-                stdout=stdout,
-                stderr=stderr,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
+                bufsize=1,
             )
         except OSError as exc:
             raise RunnerFailure(
@@ -730,6 +791,22 @@ def execute_launch(plan: LaunchPlan) -> dict[str, Any]:
                 ErrorClassification.INFRASTRUCTURE_FAILURE,
             ) from exc
         assert process.stdin is not None
+        assert process.stdout is not None
+        assert process.stderr is not None
+        stdout_thread = threading.Thread(
+            target=_stream_redacted,
+            args=(process.stdout, stdout),
+            kwargs={"sensitive_values": sensitive_values},
+            daemon=True,
+        )
+        stderr_thread = threading.Thread(
+            target=_stream_redacted,
+            args=(process.stderr, stderr),
+            kwargs={"sensitive_values": sensitive_values},
+            daemon=True,
+        )
+        stdout_thread.start()
+        stderr_thread.start()
         process.stdin.write(plan.bootstrap_prompt)
         process.stdin.close()
         try:
@@ -743,6 +820,15 @@ def execute_launch(plan: LaunchPlan) -> dict[str, Any]:
                 check=False,
             )
             exit_code = process.wait(timeout=30)
+        stdout_thread.join(timeout=30)
+        stderr_thread.join(timeout=30)
+        if stdout_thread.is_alive() or stderr_thread.is_alive():
+            raise RunnerFailure(
+                "runner output stream did not close",
+                ErrorClassification.INFRASTRUCTURE_FAILURE,
+            )
+
+    _redact_file(run_dir / "final.md", sensitive_values=sensitive_values)
 
     diagnostic_text = "\n".join(
         (

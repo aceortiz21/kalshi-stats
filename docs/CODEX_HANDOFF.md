@@ -1280,3 +1280,111 @@ Automation must NOT have authority to:
 
 Development and research automation should operate in isolated
 branches/worktrees and disposable environments.
+
+---
+
+# Automation V1 Phase C1 Implementation and Canary Evidence
+
+Phase C1 now implements the automated task-worktree lifecycle and the concrete
+canary task/run creation path.
+
+Implementation:
+
+- `src/kalshi_stats/automation_worktrees.py`
+- `src/kalshi_stats/automation_canary.py`
+- `automation/canary/PROMPT.md`
+- runner redaction/stdin changes in `src/kalshi_stats/automation_runner.py`
+
+The lifecycle creates only explicitly allowed source branches under a narrow
+configured worktree root. Task branches must satisfy Phase A policy and cannot
+be `main` or `automation-integration`. Git registration, branch identity, common
+repository identity, traversal, symlinks, conflicting state, dirty cleanup,
+unknown ignored content, and non-forced disposable cleanup are tested.
+
+The dedicated automation Codex login was checked only with the supported
+non-secret `codex login status` command. It reported an authenticated ChatGPT
+login. No authentication file contents were inspected. A read-only mount was
+sufficient for that status result but caused Codex 0.151.0 to warn that it could
+not perform a client-state write. Because normal exec sessions are persistent
+and authentication refresh may need persistence, the narrowly scoped dedicated
+`/codex-home` mount remains writable. It is the only intentionally mounted
+credential state; other host credentials remain excluded.
+
+The one permitted authenticated canary attempt was frozen as:
+
+- task: `phase-c1-auth-canary-001`
+- run: `phase-c1-auth-canary-run-001`
+- branch: `automation/canary-phase-c1-v1`
+- target: `automation/runs/phase-c1-auth-canary-run-001/canary-output.txt`
+- expected content: `AUTOMATION_PHASE_C1_CANARY_OK` plus one newline
+- prompt SHA-256:
+  `a98e8d6c02fced054f3a1db0e084beb842a5bd45776d63a881ff1f9be2114610`
+- approval policy: `never`
+
+Result: FAILED before authentication/session creation. Docker was launched
+without `--interactive`, so stdin was not attached and Codex 0.151.0 exited 1
+with `No prompt provided via stdin.` The run populated `events.jsonl`, recorded
+the exit and error classification, but produced no expected output, no final
+message, and no session/thread ID. No human command approval was requested by the
+canary, but this is not a zero-approval success because the run itself failed.
+
+The root cause is fixed by adding `--interactive` to the generated Docker
+command and regression-testing the flag. No second authenticated canary was run
+in Phase C1 because the task authorized exactly one attempt. The failed task/run
+evidence is preserved under ignored automation state, and the failed disposable
+worktree/branch are retained for review rather than force-cleaned.
+
+Protected boundary evidence before and after the failed canary matched:
+
+- `main`: `c88f6d4defe0835639e395e4c97f519308515dbf`
+- primary runtime branch: `tonight-stabilize`
+- primary runtime Git status: clean
+
+No runtime restart, integration merge, research experiment, database access,
+ML Phase 3B work, or live-money execution change occurred.
+
+Before Phase C2, a human must review the stdin fix and explicitly authorize a
+new canary task/run if end-to-end authenticated success proof is still required.
+Phase C2 itself remains responsible for bounded retry/rate-limit policy,
+automatic context rollover and `codex exec resume`, dispatcher/scheduling,
+general mechanical validation gates, builder/reviewer separation, compact
+handoff/history automation, and unattended reporting. Runtime supervision,
+deployment, autonomous integration merges, the research planner, soak testing,
+and ML Phase 3B remain later checklist work, not Phase C2 completions.
+
+## Phase C1 authenticated canary retry — PASS
+
+Human review separately authorized exactly one new canary after the stdin fix.
+The original failed task/run evidence was preserved unchanged and was not reused.
+
+New frozen identity:
+
+- task: `phase-c1-auth-canary-002`
+- run: `phase-c1-auth-canary-run-002`
+- branch: `automation/canary-phase-c1-v2`
+- worktree: `/home/aceortiz/stats-auto/tasks/phase-c1-auth-canary-002`
+- target: `automation/runs/phase-c1-auth-canary-run-002/canary-output.txt`
+- prompt SHA-256:
+  `e1bfcc0f93af2d5260ad39de31c1dbe61f90858f564c5967ec780f51d3cea6d1`
+
+Result: PASS.
+
+- authenticated Codex thread started;
+- stdin prompt was delivered;
+- human approvals: 0;
+- exact output matched `AUTOMATION_PHASE_C1_CANARY_OK` plus one newline;
+- exit code: 0;
+- runner classification: `SUCCESS`;
+- task and run state: `PASSED`;
+- session/thread ID was captured;
+- `events.jsonl` and `final.md` were populated;
+- durable diagnostics contained neither the host auth path nor secret-shaped
+  values;
+- `main` SHA and the primary runtime branch/status were unchanged;
+- no live runtime restart, database access, or real-money credential exposure
+  occurred;
+- evidence was archived before the clean disposable branch/worktree were removed.
+
+Phase C1 is complete. Automatic context rollover, rate-limit handling,
+dispatch/scheduling, and the other unchecked checklist items remain Phase C2 or
+later work and were not started.

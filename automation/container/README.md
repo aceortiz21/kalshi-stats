@@ -96,6 +96,13 @@ guarantees no human approval dialog can freeze the run. `danger-full-access`
 removes the inner Codex filesystem sandbox only inside the externally constrained
 container. It must never be used by this runner directly on the host.
 
+The enclosing Docker invocation must include `--interactive` even though it has
+no TTY. That flag keeps stdin attached long enough to deliver the frozen prompt
+to Codex. The first Phase C1 canary exposed this requirement when the original
+Phase B command omitted it and Codex exited with `No prompt provided via stdin.`
+The adapter now includes the flag and has regression coverage; it still exposes
+no interactive approval channel because the Codex policy remains `never`.
+
 `--ignore-user-config` prevents an ordinary user config from changing the run;
 authentication still comes from `CODEX_HOME`. Optional reasoning effort uses the
 0.151.0 accepted strict-config key `model_reasoning_effort`. The CLI exposes
@@ -160,12 +167,40 @@ files, injects credential values, forwards API-key variables, or logs environmen
 values. Rotate or remove this dedicated directory independently of the user's
 normal Codex installation.
 
+### Authentication credential boundary and mount mode
+
+The dedicated automation Codex authentication material is a credential required
+by the Codex client. It is the **only intentionally mounted credential state**.
+All other host credential locations and credential-like environment variables
+remain inaccessible. This distinction is unavoidable: an authenticated Codex
+call cannot be made without providing the client its own narrowly scoped login
+state, but that does not authorize mounting unrelated SSH, cloud, user Codex, or
+Kalshi credentials.
+
+Phase C1 audited a read-only `/codex-home` mount with the supported non-secret
+`codex login status` command. Authentication status succeeded, but Codex 0.151.0
+also emitted a read-only-filesystem warning from an attempted client-state write.
+The installed CLI's persistent `codex exec` behavior stores session state, and a
+long-lived ChatGPT login may need to persist refreshed authentication state.
+Therefore `/codex-home` remains writable for unattended authenticated runs. It is
+not broadened: the mount source remains the dedicated mode-0700 automation
+directory and no other host credential path is mounted.
+
+Runner command metadata substitutes `<dedicated-automation-auth>` for the host
+source path. Streamed stdout/stderr and the final response pass through
+deterministic redaction for that host path, private-key blocks, bearer values,
+OpenAI-shaped secret values, and credential-like assignments before durable
+diagnostics are retained. Environment values are never included in command
+metadata.
+
 Docker client configurations can inject proxy variables implicitly. The runner
 therefore emits empty values for all standard upper/lowercase proxy variables
 unless the caller explicitly requests that allowlisted name; requested values are
 inherited by name and remain absent from diagnostics.
 
-Phase B intentionally does not perform an authenticated unattended Codex call.
+Phase B itself did not perform an authenticated unattended Codex call. Phase C1
+adds exactly one frozen authenticated canary through the Phase B command and
+isolated-container boundary; it does not broaden the runner's authority.
 
 ## Smoke test
 
