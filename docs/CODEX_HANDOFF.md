@@ -659,3 +659,275 @@ Preserve Logistic V1 unchanged as the original baseline.
 
 Gradient boosting should be evaluated only after this corrected
 linear residual experiment.
+
+---
+
+# ML Phase 1B Completed — Market Residual Logistic Ablation
+
+Phase 1B tested whether stationary BTC/market-state features add
+probability information after conditioning on Kalshi's current
+market probability.
+
+The experiment preserved the original Logistic V1 result.
+
+New implementation:
+
+- src/kalshi_stats/ml_residual_walkforward.py
+
+Supporting changes:
+
+- src/kalshi_stats/ml_dataset.py
+- src/kalshi_stats/ml_baselines.py
+- tests/test_ml_residual_walkforward.py
+
+Generated report:
+
+reports/ml_logistic_residual_walkforward.json
+
+The report is a generated research artifact and may remain ignored
+by Git.
+
+## Dataset / Validation
+
+The experiment used:
+
+- 88,359 historical feature rows
+- 5,891 unique markets
+- 44,184 chronological test rows
+- 2,946 later test markets
+
+The same market-level expanding walk-forward philosophy as V1 was
+preserved.
+
+No market crosses a train/test boundary.
+
+Preprocessing and fitting occur using training data only.
+
+The experiment ran against a frozen SQLite backup rather than the
+live database.
+
+## Market Probability
+
+The fixed Kalshi probability definition is:
+
+market_p =
+(yes_bid_close + yes_ask_close) / 2
+
+The corresponding logit is:
+
+log(market_p / (1 - market_p))
+
+A fixed epsilon of:
+
+1e-6
+
+is used only to make exact 0 and 1 probabilities finite.
+
+Interior probabilities are not modified.
+
+## Stationary Feature Set
+
+The fixed stationary feature set contains:
+
+- seconds_remaining
+- threshold_distance_bps
+- threshold_distance_vol60
+- return_30s
+- return_60s
+- return_180s
+- return_300s
+- ema_5s_9s_bps
+- ema_9s_21s_bps
+- ema_5s_slope_bps
+- ema_9s_slope_bps
+- ema_21s_slope_bps
+- ema_5m_9m_bps
+- ema_9m_21m_bps
+- ema_5m_slope_bps
+- ema_9m_slope_bps
+- ema_21m_slope_bps
+- vwap_distance_60s_bps
+- vwap_distance_300s_bps
+- realized_vol_60s_bps
+- realized_vol_300s_bps
+- range_60s_bps
+- range_300s_bps
+- relative_volume_60s
+
+No:
+
+- Kalshi price fields
+- absolute BTC level
+- raw EMA level
+- raw VWAP level
+- settlement result
+
+are included in STATE_ONLY.
+
+## Models Tested
+
+RAW KALSHI
+
+Contemporaneous YES bid/ask midpoint.
+
+MARKET_ONLY
+
+Logistic regression using market_logit only.
+
+STATE_ONLY
+
+Logistic regression using only stationary state features.
+
+MARKET_PLUS_STATE
+
+Logistic regression using:
+
+market_logit
++
+the exact stationary feature set.
+
+## Aggregate Results
+
+Raw Kalshi:
+
+Brier:
+~0.140142
+
+Log loss:
+~0.421051
+
+MARKET_ONLY:
+
+Brier:
+~0.140292
+
+Log loss:
+~0.421471
+
+STATE_ONLY:
+
+Brier:
+~0.177909
+
+Log loss:
+~0.538245
+
+MARKET_PLUS_STATE:
+
+Brier:
+~0.140235
+
+Log loss:
+~0.421258
+
+## Interpretation
+
+MARKET_PLUS_STATE slightly improved on MARKET_ONLY:
+
+Brier improvement:
+~0.0000565
+
+Log-loss improvement:
+~0.0002131
+
+However this improvement occurred on both metrics in only:
+
+3 of 5 chronological folds
+
+It was worse in folds 1 and 3.
+
+Therefore the incremental improvement is NOT chronologically stable.
+
+MARKET_PLUS_STATE also remained worse than untouched raw Kalshi:
+
+Brier worse by:
+~0.0000934
+
+Log loss worse by:
+~0.0002075
+
+Raw Kalshi also had better aggregate calibration.
+
+Market-equal-weight metrics preserved the same conclusion.
+
+Therefore:
+
+NO stable probability improvement over Kalshi was demonstrated.
+
+NO trading edge was demonstrated.
+
+## Important Positive Finding
+
+STATE_ONLY beat a fold-training prevalence benchmark in all five
+chronological folds.
+
+Therefore the stationary BTC/state variables do contain standalone
+settlement information.
+
+However that information is substantially weaker than Kalshi's
+contemporaneous market probability.
+
+Current evidence suggests that Kalshi already incorporates much of
+the information represented by the linear state features.
+
+## Market Calibration Finding
+
+MARKET_ONLY original-unit market_logit coefficients were
+approximately:
+
+1.0466 to 1.0612
+
+mean:
+~1.0552
+
+MARKET_PLUS_STATE coefficients were approximately:
+
+1.0275 to 1.0603
+
+mean:
+~1.0427
+
+MARKET_ONLY intercepts were approximately:
+
+0.0301 to 0.0831
+
+This is relatively close to the identity relationship:
+
+predicted log odds ~= market log odds
+
+The small recalibration deviations did not improve aggregate
+probability quality.
+
+## Validation
+
+After Phase 1B:
+
+- full pytest suite: 145 passed
+- compileall: passed
+- start.sh syntax: passed
+- snapshot.sh syntax: passed
+- git diff --check: passed
+
+## Next Research Question
+
+The linear experiments are now sufficiently characterized.
+
+The next justified experiment is a NONLINEAR tabular baseline.
+
+The key question is:
+
+Can nonlinear interactions among stationary BTC/state variables
+provide incremental predictive information beyond Kalshi's market
+probability?
+
+The next phase should use gradient-boosted trees with fixed,
+predeclared model settings and the same chronological folds.
+
+Do not tune hyperparameters using the five existing test folds.
+
+The existing folds have now been inspected multiple times and should
+be treated as evaluation evidence rather than a hyperparameter tuning
+surface.
+
+Any model-selection process must preserve a future untouched
+evaluation period or use training-only internal chronology.
