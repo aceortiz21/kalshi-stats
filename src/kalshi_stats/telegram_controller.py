@@ -512,13 +512,15 @@ class AutomationController:
 
 def build_worker_command(
     repository: Path, *, worktree_root: Path, primary_runtime: Path,
-    auth_directory: Path, image: str,
+    auth_directory: Path, image: str, base_branch: str,
 ) -> tuple[str, ...]:
     return (
         sys.executable, "-m", "kalshi_stats.automation_cli", "run", "--continuous",
         "--worktree-root", str(worktree_root),
         "--primary-runtime-worktree", str(primary_runtime),
-        "--auth-directory", str(auth_directory), "--image", image,
+        "--auth-directory", str(auth_directory),
+        "--base-branch", base_branch,
+        "--image", image,
     )
 
 

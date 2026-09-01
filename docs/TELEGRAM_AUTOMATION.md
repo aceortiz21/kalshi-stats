@@ -1,6 +1,9 @@
 # Telegram Automation V1
 
-Run these commands from the Automation V1 repository checkout:
+Run these commands from the stable Automation V1 control checkout at
+`~/stats-auto/control`. The launcher uses the dedicated automation Python
+environment at `~/stats-auto/phase-c1/.venv` and the stable
+`automation/control-v1` base branch.
 
 ```bash
 ./automationctl start

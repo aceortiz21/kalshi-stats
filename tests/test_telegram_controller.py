@@ -384,3 +384,11 @@ def test_cli_start_defaults_to_dedicated_host_auth_directory(tmp_path, monkeypat
         captured["worker_command"].index("--auth-directory") + 1
     ] == expected
     assert captured["command"][captured["command"].index("--auth-directory") + 1] == expected
+
+    assert captured["worker_command"][
+        captured["worker_command"].index("--base-branch") + 1
+    ] == "automation/control-v1"
+
+    assert captured["command"][
+        captured["command"].index("--base-branch") + 1
+    ] == "automation/control-v1"

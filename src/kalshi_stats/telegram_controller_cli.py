@@ -21,6 +21,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--worktree-root", type=Path)
     parser.add_argument("--primary-runtime", type=Path, default=Path.home() / "stats")
     parser.add_argument("--auth-directory", type=Path)
+    parser.add_argument("--base-branch", default="automation/control-v1")
     parser.add_argument("--image", default="kalshi-stats-automation:phase-b-v1")
     return parser
 
@@ -45,7 +46,7 @@ def main(argv=None) -> int:
     auth_directory = (args.auth_directory or paths.data_root / "codex-home").resolve()
     worker_command = build_worker_command(
         repository, worktree_root=worktree_root, primary_runtime=args.primary_runtime.resolve(),
-        auth_directory=auth_directory, image=args.image,
+        auth_directory=auth_directory, image=args.image, base_branch=args.base_branch,
     )
     controller = AutomationController(
         repository=repository, paths=paths, credentials=credentials,
@@ -62,7 +63,9 @@ def main(argv=None) -> int:
         "--repository", str(repository), "--data-root", str(paths.data_root),
         "--credentials", str(credentials_path), "--worktree-root", str(worktree_root),
         "--primary-runtime", str(args.primary_runtime.resolve()),
-        "--auth-directory", str(auth_directory), "--image", args.image,
+        "--auth-directory", str(auth_directory),
+        "--base-branch", args.base_branch,
+        "--image", args.image,
     )
     print(f"Telegram controller: {controller_process.start(command, log_path=paths.log)}")
     return 0

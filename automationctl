@@ -2,6 +2,14 @@
 set -euo pipefail
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+python_bin="${HOME}/stats-auto/phase-c1/.venv/bin/python"
+
+if [[ ! -x "${python_bin}" ]]; then
+    echo "Automation Python unavailable: ${python_bin}" >&2
+    exit 1
+fi
+
 export PYTHONPATH="${repo_dir}/src${PYTHONPATH:+:${PYTHONPATH}}"
 cd -- "${repo_dir}"
-exec python3 -m kalshi_stats.telegram_controller_cli "$@" --repository "${repo_dir}"
+
+exec "${python_bin}"     -m kalshi_stats.telegram_controller_cli     "$@"     --repository "${repo_dir}"

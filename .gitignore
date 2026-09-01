@@ -35,3 +35,10 @@ temp/
 
 # Packaging artifacts
 *.egg-info/
+
+# Automation runtime state
+automation/tasks/*.json
+automation/tasks/*.prompt.md
+automation/runs/
+automation/history/
+automation/state/
