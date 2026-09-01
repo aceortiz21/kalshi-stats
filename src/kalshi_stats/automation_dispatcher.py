@@ -334,7 +334,7 @@ class Dispatcher:
             if diff_result.returncode:
                 raise DispatcherFailure("unable to construct the complete reviewer diff from the durable base")
             diff = diff_result.stdout
-            run_id = f"{task.task_id}-review-{cycle}"
+            run_id = f"{builder_run.run_id}-review-{cycle}"
             reviewed, classification = run_role(current, reviewer_prompt(task, builder_run_id=current_run.run_id, validation_path=f"automation/runs/{builder_run.run_id}/mechanical-validation-{cycle}.json", diff_text=diff), run_id, TaskStatus.REVIEWING, TaskStatus.REVIEWING)
             if classification is not ErrorClassification.SUCCESS or not reviewed.session_thread_id:
                 raise DispatcherFailure(f"independent reviewer failed: {classification.value}")
@@ -344,7 +344,7 @@ class Dispatcher:
 
         def repair(current_task, review_result, cycle):
             current = load_task(_task_path(self.repository, current_task))
-            run_id = f"{task.task_id}-repair-{cycle}"
+            run_id = f"{builder_run.run_id}-repair-{cycle}"
             repaired, classification = run_role(current, repair_prompt(task, review_result), run_id, TaskStatus.RUNNING, TaskStatus.VALIDATING)
             _event(self.repository, "builder.repair", current, builder_run_id=repaired.run_id, reviewer_run_id=review_result.reviewer_run_id, repair_cycle=cycle, classification=classification.value)
             if classification is ErrorClassification.SUCCESS:
